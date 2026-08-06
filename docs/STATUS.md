@@ -1,12 +1,14 @@
 # Status — August 6, 2026
 
-- Build steps 1–3 implementation: complete.
+- Build steps 1–3 implementation (Codex): complete.
+- Build steps 4–6 implementation (Claude): complete, GPU-free and unexecuted.
 - Real dataset development evidence: complete; test not loaded.
-- GPU execution of untuned validation baseline: pending T4.
-- GPU execution of QLoRA parameter/memory audit: pending T4.
-- Build steps 4–7: assigned to Claude Code after the two GPU artifacts exist.
-- Tests: 15 passing locally.
-- Resume eligible: no.
+- GPU execution of untuned validation baseline: **pending T4**.
+- GPU execution of QLoRA parameter/memory audit: **pending T4**.
+- GPU execution of training and the single final test: **pending T4**.
+- Tests: 38 passing locally, all GPU-free.
+- Resume eligible: no — no measured result exists, and the explanation gate in
+  `docs/LEARNING_GUIDE.md` has not been attempted.
 
 Verified development split:
 
@@ -16,3 +18,25 @@ Verified development split:
   `bd9922811b0418edba481a1f73fede5a202f934133ebac6a0cf866bdb2143c7c`;
 - publisher test: 7,600 declared by the pinned dataset, not loaded by the
   development evidence command.
+
+## What runs next, in order
+
+1. `notebooks/loraforge_t4.ipynb` on a Colab/Kaggle T4 → `outputs/base-validation.json`
+   and `outputs/qlora-setup.json`, restored into the repository.
+2. `notebooks/loraforge_t4_phase2.ipynb` → training, `outputs/training-report.json`,
+   `adapters/selected/`, `outputs/frozen-selection.json`, then one
+   `outputs/final-test-report.json`.
+3. `loraforge verify` locally, reproducing every number from the stored logits.
+4. Only then: fill results into the README, and only after the oral gate does
+   anything reach the résumé or the site.
+
+## Artifacts and who writes them
+
+| Artifact | Written by | Exists |
+|---|---|---|
+| `docs/evidence/*.json` | phase-1 local commands | yes |
+| `outputs/base-validation.json` | phase-1 notebook (T4) | no |
+| `outputs/qlora-setup.json` | phase-1 notebook (T4) | no |
+| `outputs/training-report.json`, `adapters/` | `loraforge train` (T4) | no |
+| `outputs/frozen-selection.json` | `loraforge freeze-selection` | no |
+| `outputs/final-test-report.json` | `loraforge final-test` (T4, once) | no |

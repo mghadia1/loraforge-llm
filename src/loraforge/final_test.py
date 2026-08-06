@@ -1,0 +1,210 @@
+"""Step 5: the one and only publisher-test evaluation, base versus selected adapter."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .config import ExperimentConfig
+from .metrics import evaluation_block, softmax
+from .provenance import (
+    EvidenceError,
+    environment,
+    load_logits,
+    read_json,
+    save_logits,
+    sha256_array,
+    sha256_labels,
+    utc_now,
+    write_json,
+)
+from .selection import METRIC_TOLERANCE, recompute_block, require_frozen_selection
+
+FINAL_REPORT = Path("outputs/final-test-report.json")
+CONFIRMATION = "i-am-running-the-single-final-test"
+
+
+def _system_block(
+    logits: np.ndarray, labels: list[int], temperature: float, seconds: float
+) -> dict[str, Any]:
+    before = evaluation_block(logits, labels)
+    after = evaluation_block(logits, labels, temperature=temperature)
+    if not np.array_equal(
+        softmax(logits).argmax(1), softmax(logits / temperature).argmax(1)
+    ):
+        raise EvidenceError("temperature scaling changed argmax predictions on test")
+    if before["macro_f1"] != after["macro_f1"]:
+        raise EvidenceError("temperature changed macro-F1; calibration must not move predictions")
+    return {
+        "metrics_before_temperature": before,
+        "validation_fitted_temperature": temperature,
+        "metrics_after_temperature": after,
+        "prediction_sha256": sha256_labels(softmax(logits).argmax(1).tolist()),
+        "scoring_seconds": seconds,
+        "seconds_per_row": seconds / len(labels),
+    }
+
+
+def run_final_test(
+    config: ExperimentConfig,
+    *,
+    confirmation: str,
+    root: Path = Path("."),
+) -> dict[str, Any]:
+    """Score the locked 7,600-row publisher test once with base and tuned systems."""
+    from .data import load_dataset
+    from .modeling import attach_saved_adapter, load_quantized_base, score_class_codes
+
+    root = Path(root)
+    if confirmation != CONFIRMATION:
+        raise EvidenceError(
+            f"the final test evaluation requires the explicit confirmation {CONFIRMATION!r}"
+        )
+    if (root / FINAL_REPORT).exists():
+        raise EvidenceError(
+            f"{FINAL_REPORT} already exists; the protocol allows exactly one test evaluation"
+        )
+    frozen = require_frozen_selection(root=root)
+
+    base_model, tokenizer = load_quantized_base(config)
+    model = attach_saved_adapter(base_model, root / frozen["selected_adapter_dir"])
+    bundle = load_dataset(allow_test=True, config=config.data)
+    test = bundle.require_test()
+    if len(test) != config.data.publisher_test_rows:
+        raise EvidenceError(
+            f"publisher test has {len(test)} rows, expected {config.data.publisher_test_rows}"
+        )
+
+    try:
+        def score(disable_adapter: bool) -> tuple[np.ndarray, float]:
+            started = time.perf_counter()
+            if disable_adapter:
+                with model.disable_adapter():
+                    logits = score_class_codes(
+                        model,
+                        tokenizer,
+                        test.texts,
+                        batch_size=config.training.per_device_eval_batch_size,
+                        max_length=config.training.max_sequence_length,
+                    )
+            else:
+                logits = score_class_codes(
+                    model,
+                    tokenizer,
+                    test.texts,
+                    batch_size=config.training.per_device_eval_batch_size,
+                    max_length=config.training.max_sequence_length,
+                )
+            return logits, time.perf_counter() - started
+
+        labels = test.labels
+        base_logits, base_seconds = score(True)
+        base_reference = save_logits(base_logits, root, "outputs/logits/base-test.npy")
+        tuned_logits, tuned_seconds = score(False)
+        tuned_reference = save_logits(tuned_logits, root, "outputs/logits/tuned-test.npy")
+        base = _system_block(
+            base_logits, labels, frozen["validation"]["base"]["temperature"], base_seconds
+        )
+        tuned = _system_block(
+            tuned_logits, labels, frozen["validation"]["tuned"]["temperature"], tuned_seconds
+        )
+    except Exception as error:  # preserve the failed attempt rather than retrying silently
+        write_json(
+            {
+                "created_at_utc": utc_now(),
+                "stage": "test scoring and metrics",
+                "error": f"{type(error).__name__}: {error}",
+                "selected_epoch": frozen["selected_epoch"],
+                "note": "any logits already written under outputs/logits are from this attempt",
+            },
+            root / "outputs" / "failed-attempts" / f"final-test-{int(time.time())}.json",
+        )
+        raise
+
+    report = {
+        "schema_version": 1,
+        "created_at_utc": utc_now(),
+        "test_evaluated": True,
+        "test_evaluations_run": 1,
+        "split": "publisher test",
+        "rows": len(test),
+        "test_label_sha256": sha256_labels(labels),
+        "test_row_ids_sha256": test.id_sha256(),
+        "model": config.model_name,
+        "model_revision": config.model_revision,
+        "selected_epoch": frozen["selected_epoch"],
+        "selected_adapter_hashes": frozen["selected_adapter_hashes"],
+        "config": config.to_dict(),
+        "environment": environment(),
+        "decoding": (
+            "constrained: argmax over the four class-code token logits, so an unparseable "
+            "free-text answer is impossible by construction and invalid_prediction_rate is 0"
+        ),
+        "systems": {
+            "base": {**base, "logits": base_reference},
+            "tuned": {**tuned, "logits": tuned_reference},
+        },
+        "delta": {
+            "macro_f1": tuned["metrics_before_temperature"]["macro_f1"]
+            - base["metrics_before_temperature"]["macro_f1"],
+            "accuracy": tuned["metrics_before_temperature"]["accuracy"]
+            - base["metrics_before_temperature"]["accuracy"],
+            "ece_after_temperature": tuned["metrics_after_temperature"]["calibration"]["ece"]
+            - base["metrics_after_temperature"]["calibration"]["ece"],
+            "note": "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is",
+        },
+    }
+    write_json(report, root / FINAL_REPORT)
+    frozen["test_evaluated"] = True
+    frozen["test_evaluated_at_utc"] = report["created_at_utc"]
+    write_json(frozen, root / "outputs" / "frozen-selection.json")
+    return report
+
+
+def verify_final_report(
+    *, root: Path = Path("."), labels: list[int] | None = None
+) -> dict[str, Any]:
+    """Recompute every headline test number from the stored logits and hashes."""
+    root = Path(root)
+    report = read_json(root / FINAL_REPORT)
+    if report.get("test_evaluations_run") != 1:
+        raise EvidenceError("the final report must record exactly one test evaluation")
+    frozen = read_json(root / "outputs" / "frozen-selection.json")
+    if (
+        frozen["selected_adapter_hashes"]["combined_sha256"]
+        != report["selected_adapter_hashes"]["combined_sha256"]
+    ):
+        raise EvidenceError("final report adapter hash does not match the frozen selection")
+
+    if labels is None:
+        from .config import DataConfig
+        from .data import load_dataset
+
+        bundle = load_dataset(allow_test=True, config=DataConfig(**report["config"]["data"]))
+        labels = bundle.require_test().labels
+    if sha256_labels(labels) != report["test_label_sha256"]:
+        raise EvidenceError("test labels no longer match the final report")
+
+    checked = {}
+    for name, system in report["systems"].items():
+        logits = load_logits(system["logits"], root=root)
+        recompute_block(logits, labels, system["metrics_before_temperature"], f"{name}.before")
+        recompute_block(logits, labels, system["metrics_after_temperature"], f"{name}.after")
+        predictions = softmax(logits).argmax(1).tolist()
+        if sha256_labels(predictions) != system["prediction_sha256"]:
+            raise EvidenceError(f"{name} predictions do not match their recorded hash")
+        checked[name] = {
+            "macro_f1": system["metrics_before_temperature"]["macro_f1"],
+            "logits_sha256": sha256_array(logits),
+        }
+
+    delta = (
+        report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"]
+        - report["systems"]["base"]["metrics_before_temperature"]["macro_f1"]
+    )
+    if abs(delta - report["delta"]["macro_f1"]) > METRIC_TOLERANCE:
+        raise EvidenceError("recorded macro-F1 delta does not match its own system metrics")
+    return {"verified": True, "systems": checked, "macro_f1_delta": delta}

@@ -1,5 +1,11 @@
 # Claude Code handoff — LoRAForge second half
 
+> **Progress note, August 6, 2026.** Steps 4–6 are implemented and tested
+> GPU-free, but neither `outputs/base-validation.json` nor `outputs/qlora-setup.json`
+> existed, so — as this document instructs — no GPU work was run and no number
+> was invented. See `docs/STATUS.md` for what is still pending and
+> `notebooks/loraforge_t4_phase2.ipynb` for the run that produces it.
+
 You own Build Steps 4–7 only. Do not redo or silently change the frozen first
 half. Start only after Mayank runs `notebooks/loraforge_t4.ipynb` on a T4 and
 places these files in the repository:

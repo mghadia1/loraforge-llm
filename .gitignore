@@ -4,6 +4,6 @@ __pycache__/
 *.pyc
 *.egg-info/
 .env
-outputs/
-adapters/
+outputs/trainer/
+adapters/epoch-*/
 wandb/

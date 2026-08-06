@@ -1,4 +1,4 @@
-# How the LoRAForge first half works
+# How LoRAForge works
 
 ## Why four class codes
 
@@ -54,3 +54,48 @@ selects the adapter and fits a temperature for each system. The one final test
 run reports macro-F1, per-class metrics, NLL, ECE before/after temperature, and
 invalid-output rate. Temperature scaling cannot change argmax predictions, so
 it cannot improve macro-F1.
+
+## Training the two frozen epochs
+
+`build_supervised_features` encodes each training row and asserts that exactly
+two tokens — the answer code and EOS — escape the `-100` mask. `pad_batch`
+right-pads a batch: inputs with the pad ID, attention with `0`, labels with
+`-100`, so padding contributes nothing to the loss either. This is deliberately
+not an off-the-shelf SFT text path, which would compute loss over the prompt.
+
+Before the first optimizer step, the trainer re-scores validation with the
+adapter switched off and refuses to continue unless it reproduces the phase-one
+baseline macro-F1. That single check catches a changed prompt, tokenizer, or
+model revision between the two GPU sessions — the failure that would otherwise
+turn into a fake improvement.
+
+After each epoch the adapter is saved, hashed, and scored on validation. The
+selection rule is one line: highest validation macro-F1, and an exact tie goes
+to the earlier epoch. Both checkpoints, their validation logits, the loss curve,
+wall time, peak CUDA memory, package versions, and adapter hashes land in
+`outputs/training-report.json`.
+
+## Why the evidence is hashed
+
+Every reported number is recomputable from raw logits stored next to it, and
+`loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
+logits, logits are checked against their SHA-256, adapters are checked against
+their directory hash, and the selected epoch is re-derived from the rule rather
+than trusted. Editing a macro-F1 by hand in a report makes verification fail —
+which is the point. The GPU-free tests include exactly those tamper cases.
+
+## The one test evaluation
+
+`frozen-selection.json` is written before the test split is ever loaded. It
+pins the selected adapter, its hashes, the validation metrics, and the two
+validation-fitted temperatures. The final command refuses to run unless that
+file exists, refuses if the adapter's hash has changed since, refuses without an
+explicit confirmation string, and refuses to overwrite an existing final report.
+
+Both systems are scored from the same loaded model — adapter disabled for the
+base, enabled for the tuned — so the prompt, tokenizer, and quantization are
+identical by construction. Because decoding is constrained to the four class
+logits, the invalid-output rate is 0 by construction; that is a property of the
+scoring design, not a result. A failure during test scoring is written to
+`outputs/failed-attempts/` rather than retried silently, and a negative delta is
+reported exactly like a positive one.

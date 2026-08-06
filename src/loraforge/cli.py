@@ -1,4 +1,4 @@
-"""GPU-free LoRAForge preparation commands."""
+"""LoRAForge commands: GPU-free preparation and verification, plus the guarded GPU runs."""
 
 from __future__ import annotations
 
@@ -21,34 +21,109 @@ def build_parser() -> argparse.ArgumentParser:
     examples.add_argument(
         "--output", type=Path, default=Path("docs/evidence/formatted-examples.json")
     )
+
+    train = commands.add_parser("train", help="run the two frozen QLoRA epochs (needs a GPU)")
+    train.add_argument("--root", type=Path, default=Path("."))
+
+    freeze = commands.add_parser(
+        "freeze-selection", help="verify training evidence and freeze the adapter plus temperatures"
+    )
+    freeze.add_argument("--root", type=Path, default=Path("."))
+
+    final = commands.add_parser(
+        "final-test", help="the single publisher-test evaluation (needs a GPU and confirmation)"
+    )
+    final.add_argument("--root", type=Path, default=Path("."))
+    final.add_argument(
+        "--confirm",
+        default="",
+        help="must be exactly 'i-am-running-the-single-final-test'",
+    )
+
+    verify = commands.add_parser(
+        "verify", help="recompute stored metrics from stored logits and reject edited evidence"
+    )
+    verify.add_argument("--root", type=Path, default=Path("."))
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     config = default_config()
+
     if args.command == "write-config":
         output = Path("configs/experiment.json")
         config.write(output)
         print(json.dumps({"output": str(output), "test_evaluations_allowed": 1}))
         return 0
+
+    if args.command == "train":
+        from .modeling import load_quantized_base
+        from .qlora import attach_lora
+        from .training import train_qlora
+
+        bundle = load_dataset(allow_test=False, config=config.data)
+        model, tokenizer = load_quantized_base(config)
+        model = attach_lora(model, config)
+        report = train_qlora(model, tokenizer, bundle, config, root=args.root)
+        print(json.dumps({
+            "selected_epoch": report["selection"]["selected_epoch"],
+            "wall_time_seconds": report["wall_time_seconds"],
+            "peak_cuda_memory_gib": report["peak_cuda_memory_gib"],
+        }))
+        return 0
+
+    if args.command == "freeze-selection":
+        from .selection import build_frozen_selection
+
+        frozen = build_frozen_selection(root=args.root)
+        print(json.dumps({
+            "selected_epoch": frozen["selected_epoch"],
+            "base_temperature": frozen["validation"]["base"]["temperature"],
+            "tuned_temperature": frozen["validation"]["tuned"]["temperature"],
+        }))
+        return 0
+
+    if args.command == "final-test":
+        from .final_test import run_final_test
+
+        report = run_final_test(config, confirmation=args.confirm, root=args.root)
+        print(json.dumps({
+            "base_macro_f1": report["systems"]["base"]["metrics_before_temperature"]["macro_f1"],
+            "tuned_macro_f1": report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"],
+            "macro_f1_delta": report["delta"]["macro_f1"],
+        }))
+        return 0
+
+    if args.command == "verify":
+        from .final_test import verify_final_report
+        from .provenance import read_json
+        from .selection import TRAINING_REPORT, verify_training_report
+
+        checked = {}
+        if (Path(args.root) / TRAINING_REPORT).exists():
+            selected = verify_training_report(read_json(Path(args.root) / TRAINING_REPORT), root=args.root)
+            checked["training_report"] = {"verified": True, "selected_epoch": selected["epoch"]}
+        if (Path(args.root) / "outputs/final-test-report.json").exists():
+            checked["final_test_report"] = verify_final_report(root=args.root)
+        if not checked:
+            raise SystemExit("nothing to verify: no training or final-test report exists yet")
+        print(json.dumps(checked, indent=2))
+        return 0
+
     bundle = load_dataset(allow_test=False, config=config.data)
     if args.command == "data-stats":
         write_stats(bundle, config.data, args.output)
         print(json.dumps(describe(bundle, config.data)))
         return 0
+
     examples = []
-    selected = [
+    selected_rows = [
         next(item for item in bundle.train.examples if item.label == label)
         for label in range(3)
     ]
-    for item in selected:
-        examples.append(
-            {
-                "row_id": item.row_id,
-                "messages": training_messages(item.text, item.label),
-            }
-        )
+    for item in selected_rows:
+        examples.append({"row_id": item.row_id, "messages": training_messages(item.text, item.label)})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(examples, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(args.output), "examples": len(examples)}))

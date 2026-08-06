@@ -5,10 +5,12 @@ LoRAForge is an evidence-first QLoRA study: adapt the public Apache-2.0
 classification on a single free T4, then compare the untuned base and selected
 adapter under one frozen held-out evaluation.
 
-**Current status: first half implemented, no GPU results yet, resume eligible:
-no.** Do not claim a baseline score, trainable-parameter percentage, memory use,
-adapter improvement, or calibration result until the notebook produces the
-corresponding evidence. Mayank must also pass the final explanation gate.
+**Current status: the full pipeline is implemented and tested GPU-free; no GPU
+run has happened yet, so there are no results. Resume eligible: no.** Do not
+claim a baseline score, trainable-parameter percentage, memory use, adapter
+improvement, or calibration result until the notebooks produce the corresponding
+evidence and `loraforge verify` reproduces it. Mayank must also pass the
+[explanation gate](docs/LEARNING_GUIDE.md).
 
 ## Frozen design
 
@@ -31,13 +33,37 @@ corresponding evidence. Mayank must also pass the final explanation gate.
 ## What exists
 
 - Deterministic data loader, split digests, test lock, and three real examples.
-- Prompt and assistant-token-only label masking.
+- Prompt and assistant-token-only label masking, plus the padding collator that
+  keeps prompt and padding tokens out of the loss.
 - Four-class macro-F1, per-class metrics, NLL, ECE, and temperature scaling.
 - 4-bit base-model loader, efficient class-logit scorer, LoRA attachment, and
   trainable-parameter audit.
-- T4 notebook through untuned validation baseline and QLoRA setup.
-- 15 GPU-free tests and GitHub Actions workflow.
-- Exact [Claude handoff](docs/CLAUDE_HANDOFF.md) for training and final evaluation.
+- Two-epoch training driver with per-epoch checkpointing, validation scoring,
+  and a one-line selection rule (macro-F1; ties to the earlier epoch).
+- A pre-test freeze step and a guarded single publisher-test evaluation.
+- Hash-backed evidence: every reported number is recomputable from stored logits
+  via `loraforge verify`, and hand-edited reports fail verification.
+- 38 GPU-free tests and a GitHub Actions workflow.
+- Two T4 notebooks: [phase 1](notebooks/loraforge_t4.ipynb) (baseline and QLoRA
+  setup) and [phase 2](notebooks/loraforge_t4_phase2.ipynb) (train, freeze, one
+  final test).
+
+## What does not exist yet
+
+No number. There is no base macro-F1, no trainable-parameter percentage, no T4
+memory figure, no training time, no trained adapter, no test delta, and no ECE
+result, because no GPU run has been executed. The `outputs/` directory is empty.
+
+## Order of operations
+
+```bash
+# 1. on a T4: notebooks/loraforge_t4.ipynb  -> outputs/base-validation.json, outputs/qlora-setup.json
+# 2. on a T4: notebooks/loraforge_t4_phase2.ipynb, which runs:
+loraforge train --root .              # two frozen epochs, per-epoch validation, selection
+loraforge freeze-selection --root .   # GPU-free: verify evidence, fit both temperatures
+loraforge final-test --root . --confirm i-am-running-the-single-final-test
+loraforge verify --root .             # recompute every number from the stored logits
+```
 
 ## Local checks
 
@@ -51,7 +77,13 @@ loraforge data-stats
 loraforge examples
 ```
 
-Local commands do not load model weights or publisher test data. Run
-[`notebooks/loraforge_t4.ipynb`](notebooks/loraforge_t4.ipynb) on a T4 for the
-first GPU evidence, then follow the handoff. Read
-[`docs/how-it-works.md`](docs/how-it-works.md) before changing the protocol.
+If the `loraforge` console script reports `No module named 'loraforge'` on this
+Mac, macOS has set the hidden flag on the editable install's `.pth` file and
+Python 3.14 skips hidden `.pth` files. Use `PYTHONPATH=src python -m
+loraforge.cli <command>` instead; pytest is unaffected.
+
+`write-config`, `data-stats`, `examples`, `freeze-selection`, and `verify` never
+load model weights; only `train` and `final-test` need a GPU, and only
+`final-test` reads the publisher test split. Read
+[`docs/how-it-works.md`](docs/how-it-works.md) before changing the protocol and
+[`docs/LEARNING_GUIDE.md`](docs/LEARNING_GUIDE.md) before claiming any of it.

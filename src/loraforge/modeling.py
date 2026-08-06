@@ -43,6 +43,15 @@ def load_quantized_base(config: ExperimentConfig):
     return model, tokenizer
 
 
+def attach_saved_adapter(model, adapter_dir):
+    """Load a frozen adapter for inference; the base weights stay quantized and frozen."""
+    from peft import PeftModel
+
+    adapted = PeftModel.from_pretrained(model, str(adapter_dir), is_trainable=False)
+    adapted.eval()
+    return adapted
+
+
 def score_class_codes(
     model,
     tokenizer,
