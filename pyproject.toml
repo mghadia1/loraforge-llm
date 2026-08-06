@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loraforge-llm"
+version = "0.1.0"
+description = "Evidence-first QLoRA adaptation of Mistral 7B for AG News classification"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "datasets>=4,<6",
+  "numpy>=2,<3",
+  "scikit-learn>=1.6,<2",
+]
+
+[project.optional-dependencies]
+gpu = [
+  "accelerate>=1.10,<2",
+  "bitsandbytes>=0.47,<1",
+  "peft>=0.17,<1",
+  "torch>=2.7,<3",
+  "transformers>=4.55,<6",
+  "trl>=0.21,<1",
+]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+loraforge = "loraforge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]

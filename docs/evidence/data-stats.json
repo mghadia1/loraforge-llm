@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "dataset": "fancyzhx/ag_news",
+  "dataset_revision": "eb185aade064a813bc0b7f42de02595523103ca4",
+  "publisher_train_rows": 120000,
+  "publisher_test_rows": 7600,
+  "selection": {
+    "seed": 73,
+    "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
+    "unused_publisher_train_rows": 110000
+  },
+  "classes": [
+    "World",
+    "Sports",
+    "Business",
+    "Sci/Tech"
+  ],
+  "splits": {
+    "train": {
+      "rows": 8000,
+      "class_counts": {
+        "World": 2000,
+        "Sports": 2000,
+        "Business": 2000,
+        "Sci/Tech": 2000
+      },
+      "row_ids_sha256": "0ec701367f1111d94a659335a9c3e811683a407e32350a4865e53f43bdfeaa5d"
+    },
+    "validation": {
+      "rows": 2000,
+      "class_counts": {
+        "World": 500,
+        "Sports": 500,
+        "Business": 500,
+        "Sci/Tech": 500
+      },
+      "row_ids_sha256": "bd9922811b0418edba481a1f73fede5a202f934133ebac6a0cf866bdb2143c7c"
+    }
+  },
+  "test_loaded": false
+}

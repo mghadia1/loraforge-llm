@@ -1,0 +1,53 @@
+[
+  {
+    "row_id": "0002e9a477d791a6ff6e189d6d5a97f16333fee2dea6b649b501b02ad853d064",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Classify the news article into exactly one topic. Allowed codes: A=World; B=Sports; C=Business; D=Sci/Tech. Return one code only: A, B, C, or D. Do not explain."
+      },
+      {
+        "role": "user",
+        "content": "Article:\nPLO Aides Change Course and Travel to See Arafat Top Palestinian officials are heading to France today to ascertain the real condition of the ailing leader, Yasir Arafat. The officials, including Mr.\n\nTopic code:"
+      },
+      {
+        "role": "assistant",
+        "content": "A"
+      }
+    ]
+  },
+  {
+    "row_id": "001c213d1db54d33b0a88766dda104933d0e03c204b8a74874886df4542b4362",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Classify the news article into exactly one topic. Allowed codes: A=World; B=Sports; C=Business; D=Sci/Tech. Return one code only: A, B, C, or D. Do not explain."
+      },
+      {
+        "role": "user",
+        "content": "Article:\nO #39;Brien sues Ohio State, claims firing was unfair COLUMBUS, Ohio Former Ohio State basketball coach Jim O #39;Brien is suing the school, claiming he #39;s owed at least three-point-four (M) million dollars because his firing violated terms of his contract.\n\nTopic code:"
+      },
+      {
+        "role": "assistant",
+        "content": "B"
+      }
+    ]
+  },
+  {
+    "row_id": "00170b467a43cc041d78861e6642798496c6cc95d39f56eb3a988f6409135dc2",
+    "messages": [
+      {
+        "role": "system",
+        "content": "Classify the news article into exactly one topic. Allowed codes: A=World; B=Sports; C=Business; D=Sci/Tech. Return one code only: A, B, C, or D. Do not explain."
+      },
+      {
+        "role": "user",
+        "content": "Article:\nGrows UK customer base while seeing more churn LONDON (CBS.MW) -- Mobile operator Mmo2 on Thursday said it was lifting its service revenue forecast in Britain after a strong first half.\n\nTopic code:"
+      },
+      {
+        "role": "assistant",
+        "content": "C"
+      }
+    ]
+  }
+]
