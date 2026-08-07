@@ -59,6 +59,22 @@ packed count is ever used as the denominator again.
 The recorded artifact is left exactly as the GPU produced it. The corrected
 count will appear in `outputs/training-report.json` on the next run.
 
+## Scoring optimization — August 7, 2026
+
+`score_class_codes` now asks the model to apply the LM head to the final
+position only (`logits_to_keep=1`, or `num_logits_to_keep` on older
+transformers), instead of computing a `[batch, 512, 32768]` logit tensor and
+discarding all but one row. The kwarg is discovered by walking the PEFT wrapper
+chain; if no version supports it the call falls back to full logits, and the
+returned last-position logits are identical either way.
+
+This is a compute path change made *after* `outputs/base-validation.json` was
+recorded, so the phase-2 re-score of the base model may differ from macro-F1
+0.7299 in the last few decimals. `check_baseline_agreement` allows 0.005, which
+absorbs kernel-level differences while still catching a changed prompt,
+tokenizer, or model revision. If the re-score disagrees by more than that, the
+run aborts before training rather than reporting an unexplained shift.
+
 ## What runs next, in order
 
 1. `notebooks/loraforge_t4.ipynb` on a Colab/Kaggle T4 → `outputs/base-validation.json`

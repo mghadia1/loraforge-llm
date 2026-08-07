@@ -26,6 +26,32 @@ def _left_pad_token_rows(
     return {"input_ids": input_ids, "attention_mask": attention_mask}
 
 
+def resolve_last_logit_kwargs(model) -> dict[str, int]:
+    """Find the kwarg that limits the LM head to the final position, if it exists.
+
+    Only the last position's logits are ever read, but by default the head is
+    applied to all 512, producing a [batch, 512, 32768] tensor. Transformers
+    calls the limiter `logits_to_keep` (older versions: `num_logits_to_keep`),
+    and a PEFT-wrapped model hides it behind pass-through `**kwargs`, so walk the
+    wrapper chain. Returning `{}` is safe: the result is identical either way.
+    """
+    import inspect
+
+    current = model
+    for _ in range(5):
+        if current is None:
+            break
+        try:
+            parameters = inspect.signature(current.forward).parameters
+        except (AttributeError, TypeError, ValueError):
+            parameters = {}
+        for name in ("logits_to_keep", "num_logits_to_keep"):
+            if name in parameters:
+                return {name: 1}
+        current = getattr(current, "base_model", None) or getattr(current, "model", None)
+    return {}
+
+
 def load_quantized_base(config: ExperimentConfig):
     """Load the frozen base model in 4-bit NF4. Requires a CUDA runtime."""
     import torch
@@ -89,6 +115,7 @@ def score_class_codes(
     code_ids = torch.tensor(class_code_token_ids(tokenizer), device=model.device)
     if tokenizer.pad_token_id is None:
         raise ValueError("tokenizer has no pad token ID")
+    last_logit_kwargs = resolve_last_logit_kwargs(model)
     chunks = []
     model.eval()
     with torch.inference_mode():
@@ -100,7 +127,8 @@ def score_class_codes(
                 key: torch.tensor(value, device=model.device)
                 for key, value in padded.items()
             }
-            next_token_logits = model(**encoded).logits[:, -1, :]
+            # [:, -1, :] is correct whether the head ran on one position or all.
+            next_token_logits = model(**encoded, **last_logit_kwargs).logits[:, -1, :]
             chunks.append(next_token_logits.index_select(1, code_ids).float().cpu().numpy())
     return np.concatenate(chunks, axis=0)
 
