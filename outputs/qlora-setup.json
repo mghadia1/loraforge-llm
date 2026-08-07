@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-08-07T07:43:49.377470Z",
+  "gpu_name": "Tesla T4",
+  "model": "mistralai/Mistral-7B-Instruct-v0.3",
+  "model_revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+  "quantization": {
+    "load_in_4bit": true,
+    "quant_type": "nf4",
+    "compute_dtype": "float16",
+    "use_double_quant": true
+  },
+  "lora": {
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "bias": "none",
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "parameters": {
+    "total_parameters": 3800305664,
+    "trainable_parameters": 41943040,
+    "trainable_percent": 1.1036754331979965,
+    "only_lora_parameters_trainable": true
+  },
+  "allocated_cuda_gib": 8.382594108581543,
+  "peak_cuda_gib": 12.335301399230957,
+  "test_loaded": false,
+  "adapter_trained": false
+}

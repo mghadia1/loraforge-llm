@@ -41,6 +41,24 @@ Open question for the rerun: `docs/evidence/token-length-audit.json` (median
 `encode_supervised_example` now re-checks every row against 512 during training,
 so a stale audit cannot let a truncated row through silently.
 
+## Second correction — the trainable percentage, August 7, 2026
+
+`outputs/qlora-setup.json` from the first T4 run records
+`trainable_percent: 1.1036754331979965`. **Do not quote that number.** It counts
+bitsandbytes `Params4bit` tensors by `numel()`, which returns stored elements —
+two 4-bit weights live in one byte — so the denominator is roughly half the real
+parameter count. That is why the artifact's `total_parameters` reads
+3,800,305,664 for a model with about 7.25 billion parameters.
+
+The numerator is sound: 41,943,040 trainable LoRA parameters, held in fp16 and
+not packed. Against Mistral 7B's real 7,248,023,552 parameters that is
+**0.5787%**. `parameter_report` now unpacks 4-bit tensors, reports the raw
+`numel()` sum separately as `stored_tensor_elements`, and a test fails if the
+packed count is ever used as the denominator again.
+
+The recorded artifact is left exactly as the GPU produced it. The corrected
+count will appear in `outputs/training-report.json` on the next run.
+
 ## What runs next, in order
 
 1. `notebooks/loraforge_t4.ipynb` on a Colab/Kaggle T4 → `outputs/base-validation.json`
