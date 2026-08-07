@@ -10,6 +10,22 @@ from .config import ExperimentConfig
 from .prompts import class_code_token_ids, prompt_token_ids
 
 
+def _left_pad_token_rows(
+    rows: list[list[int]], pad_token_id: int
+) -> dict[str, list[list[int]]]:
+    """Pad already-tokenized prompts without depending on tokenizer.pad internals."""
+    if not rows:
+        raise ValueError("cannot pad an empty prompt batch")
+    width = max(len(row) for row in rows)
+    input_ids = []
+    attention_mask = []
+    for row in rows:
+        padding = width - len(row)
+        input_ids.append([pad_token_id] * padding + row)
+        attention_mask.append([0] * padding + [1] * len(row))
+    return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+
 def load_quantized_base(config: ExperimentConfig):
     """Load the frozen base model in 4-bit NF4. Requires a CUDA runtime."""
     import torch
@@ -71,18 +87,19 @@ def score_class_codes(
             "do not silently truncate evaluation text"
         )
     code_ids = torch.tensor(class_code_token_ids(tokenizer), device=model.device)
+    if tokenizer.pad_token_id is None:
+        raise ValueError("tokenizer has no pad token ID")
     chunks = []
     model.eval()
     with torch.inference_mode():
         for start in range(0, len(token_rows), batch_size):
-            encoded = tokenizer.pad(
-                [
-                    {"input_ids": row, "attention_mask": [1] * len(row)}
-                    for row in token_rows[start : start + batch_size]
-                ],
-                padding=True,
-                return_tensors="pt",
-            ).to(model.device)
+            padded = _left_pad_token_rows(
+                token_rows[start : start + batch_size], int(tokenizer.pad_token_id)
+            )
+            encoded = {
+                key: torch.tensor(value, device=model.device)
+                for key, value in padded.items()
+            }
             next_token_logits = model(**encoded).logits[:, -1, :]
             chunks.append(next_token_logits.index_select(1, code_ids).float().cpu().numpy())
     return np.concatenate(chunks, axis=0)
