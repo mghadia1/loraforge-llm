@@ -19,6 +19,28 @@ Verified development split:
 - publisher test: 7,600 declared by the pinned dataset, not loaded by the
   development evidence command.
 
+## Correction to the frozen first half — August 7, 2026
+
+The first T4 attempt crashed in `score_class_codes`. Current transformers return
+a `BatchEncoding` from `apply_chat_template(tokenize=True)`, not a flat list of
+token IDs. Three consequences, all now fixed by `prompts.prompt_token_ids`,
+which normalizes list, dict, and batch-of-one returns:
+
+1. baseline scoring raised `ValueError` in `tokenizer.pad`;
+2. `encode_supervised_example` would have built training sequences out of dict
+   *keys* rather than tokens;
+3. the "prompt exceeds `max_sequence_length`" guard compared the length of a
+   two-key mapping against 512, so it could never fire.
+
+This changes no frozen fact — same prompt wording, same token IDs, same 512
+limit. It only makes the code produce what the protocol already specified. Tests
+now cover all three tokenizer return shapes and the oversized-prompt rejection.
+
+Open question for the rerun: `docs/evidence/token-length-audit.json` (median
+127, p95 160, max 432) predates this fix. The live guard in
+`encode_supervised_example` now re-checks every row against 512 during training,
+so a stale audit cannot let a truncated row through silently.
+
 ## What runs next, in order
 
 1. `notebooks/loraforge_t4.ipynb` on a Colab/Kaggle T4 → `outputs/base-validation.json`

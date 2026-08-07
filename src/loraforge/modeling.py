@@ -7,7 +7,7 @@ from typing import Iterable
 import numpy as np
 
 from .config import ExperimentConfig
-from .prompts import class_code_token_ids, inference_messages
+from .prompts import class_code_token_ids, prompt_token_ids
 
 
 def load_quantized_base(config: ExperimentConfig):
@@ -63,12 +63,7 @@ def score_class_codes(
     """Return A-D next-token logits for each prompt in one forward pass per batch."""
     import torch
 
-    token_rows = [
-        tokenizer.apply_chat_template(
-            inference_messages(text), tokenize=True, add_generation_prompt=True
-        )
-        for text in texts
-    ]
+    token_rows = [prompt_token_ids(tokenizer, text) for text in texts]
     too_long = [len(row) for row in token_rows if len(row) > max_length]
     if too_long:
         raise ValueError(

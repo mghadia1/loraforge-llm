@@ -14,6 +14,7 @@ from loraforge.prompts import (
     encode_supervised_example,
     inference_messages,
     parse_code,
+    prompt_token_ids,
     training_messages,
 )
 
@@ -62,6 +63,51 @@ def test_supervised_encoding_masks_prompt_and_trains_only_answer() -> None:
     assert encoded["input_ids"] == [1, 20, 21, 13, 2]
     assert encoded["labels"] == [-100, -100, -100, 13, 2]
     assert encoded["attention_mask"] == [1] * 5
+
+
+class BatchEncodingTokenizer(FakeTokenizer):
+    """Newer transformers returns a dict-like BatchEncoding, not a list of IDs."""
+
+    def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        if not tokenize:
+            return "<chat>"
+        return {"input_ids": [1, 20, 21], "attention_mask": [1, 1, 1]}
+
+
+class BatchOfOneTokenizer(FakeTokenizer):
+    """Some versions additionally nest the single prompt in a batch dimension."""
+
+    def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        if not tokenize:
+            return "<chat>"
+        return {"input_ids": [[1, 20, 21]], "attention_mask": [[1, 1, 1]]}
+
+
+@pytest.mark.parametrize(
+    "tokenizer", [FakeTokenizer(), BatchEncodingTokenizer(), BatchOfOneTokenizer()]
+)
+def test_prompt_ids_are_flat_whatever_the_tokenizer_returns(tokenizer) -> None:
+    assert prompt_token_ids(tokenizer, "story") == [1, 20, 21]
+
+
+@pytest.mark.parametrize(
+    "tokenizer", [FakeTokenizer(), BatchEncodingTokenizer(), BatchOfOneTokenizer()]
+)
+def test_supervised_encoding_survives_every_chat_template_return_shape(tokenizer) -> None:
+    encoded = encode_supervised_example(tokenizer, "story", 2, max_length=8)
+    assert encoded["input_ids"] == [1, 20, 21, 13, 2]
+    assert encoded["labels"] == [-100, -100, -100, 13, 2]
+
+
+def test_oversized_prompt_is_rejected_rather_than_silently_truncated() -> None:
+    class LongTokenizer(FakeTokenizer):
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            if not tokenize:
+                return "<chat>"
+            return {"input_ids": list(range(600))}
+
+    with pytest.raises(ValueError, match="exceeding frozen max"):
+        encode_supervised_example(LongTokenizer(), "story", 0, max_length=512)
 
 
 def test_code_parser_is_exact_not_fuzzy() -> None:
