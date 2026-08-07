@@ -63,12 +63,17 @@ class _EpochRecorder:
         self.callback = Callback()
 
     def capture(self, epoch: int) -> None:
+        import torch
+
         from .modeling import score_class_codes
 
         relative_dir = f"adapters/epoch-{epoch}"
         adapter_dir = self.root / relative_dir
         self.model.save_pretrained(adapter_dir)
         was_training = self.model.training
+        # Scoring alone peaked at ~11.9 GiB of a 15.4 GiB T4 in phase one, so give
+        # the evaluation every byte the training step is no longer using.
+        torch.cuda.empty_cache()
         started = time.perf_counter()
         logits = score_class_codes(
             self.model,
@@ -78,6 +83,7 @@ class _EpochRecorder:
             max_length=self.config.training.max_sequence_length,
         )
         elapsed = time.perf_counter() - started
+        torch.cuda.empty_cache()
         if was_training:
             self.model.train()
         self.logits[epoch] = logits
