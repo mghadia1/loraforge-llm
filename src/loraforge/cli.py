@@ -44,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
         "verify", help="recompute stored metrics from stored logits and reject edited evidence"
     )
     verify.add_argument("--root", type=Path, default=Path("."))
+    verify.add_argument(
+        "--reports-only",
+        action="store_true",
+        help="verify reports/logits without requiring local adapter checkpoint files",
+    )
     return parser
 
 
@@ -102,8 +107,16 @@ def main() -> int:
 
         checked = {}
         if (Path(args.root) / TRAINING_REPORT).exists():
-            selected = verify_training_report(read_json(Path(args.root) / TRAINING_REPORT), root=args.root)
-            checked["training_report"] = {"verified": True, "selected_epoch": selected["epoch"]}
+            selected = verify_training_report(
+                read_json(Path(args.root) / TRAINING_REPORT),
+                root=args.root,
+                verify_adapters=not args.reports_only,
+            )
+            checked["training_report"] = {
+                "verified": True,
+                "selected_epoch": selected["epoch"],
+                "adapter_files_verified": not args.reports_only,
+            }
         if (Path(args.root) / "outputs/final-test-report.json").exists():
             checked["final_test_report"] = verify_final_report(root=args.root)
         if not checked:

@@ -4,6 +4,21 @@
   "asset_name": "loraforge-selected-adapter-epoch2.tar.gz",
   "archive_bytes": 155529693,
   "archive_sha256": "206aa291ff32904eff9569c40a8265182a227a9ec9e46e64e9a38f1e4f800603",
+  "release_distribution": {
+    "format": "ordered_parts",
+    "reassemble_glob": "loraforge-selected-adapter-epoch2.tar.gz.part-*",
+    "parts": [
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-00", "bytes": 41943040, "sha256": "f206f5e4485745b3f2228ce93600fd591f589d9620408dd2ad74a61e414e06df"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-01", "bytes": 41943040, "sha256": "51fc8a2d5478e010f4e752334483e8e626a8a0890e9df9482c74e8cfec2ef4e2"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-02", "bytes": 41943040, "sha256": "3c33625a312956f75b151bc79657cbd9d6fa1fea52c8e6a887823990faf7d094"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-00", "bytes": 5242880, "sha256": "7f7a09c4f830b4ba60d7803d92833db3789dc3915a67b4ee4edce8d68cda8a71"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-01", "bytes": 5242880, "sha256": "085ddace19d7a2b8555ed3266ef4876f10a44e5df61a9e373745c874cdf30aa3"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-02", "bytes": 5242880, "sha256": "d94c63ecda5dabaa81d265ee7e9a8577261e848720104513d32ea84a5d7d6c8a"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-03", "bytes": 5242880, "sha256": "d625ec7e3563908565a2a9345f46951653f1edc595f20ad212438463efd8769c"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-04", "bytes": 5242880, "sha256": "d992da5d4a6c0745d44d711ef5720ff57a5b17598c183abb9bfaa29c523f2589"},
+      {"name": "loraforge-selected-adapter-epoch2.tar.gz.part-03-05", "bytes": 3486173, "sha256": "18e17bb877b4c85a300f7cb3105469802eb13af403966f68ac9e0e88a007c20d"}
+    ]
+  },
   "training_evidence_asset": {
     "asset_name": "loraforge-training-adapters-evidence.tar.gz",
     "archive_bytes": 311076112,
@@ -13,7 +28,8 @@
       "adapters/epoch-2",
       "adapters/selected"
     ],
-    "note": "epoch-2 and selected are byte-identical and stored as hard links in the archive"
+    "release_status": "local_archive_only",
+    "note": "epoch-2 and selected are byte-identical and stored as hard links; GitHub's upload endpoint repeatedly rejected this larger archive, so it is not claimed as a release asset"
   },
   "selected_epoch": 2,
   "adapter_directory": "adapters/selected",

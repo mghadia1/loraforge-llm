@@ -64,24 +64,31 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 python -m pytest
-PYTHONPATH=src python -m loraforge.cli verify --root .
+PYTHONPATH=src python -m loraforge.cli verify --root . --reports-only
 ```
 
-Verification requires the pinned AG News data revision but does not run the
-model. It selects epoch 2 again and recomputes the final macro-F1 values and
-logit hashes.
+Reports-only verification requires the pinned AG News data revision but does
+not run the model or require adapter files. It selects epoch 2 again,
+recomputes every stored metric and logit hash, and explicitly reports
+`adapter_files_verified: false`. Strict verification remains the default and
+also checks both checkpoint directories plus the selected adapter.
 
 ## Selected adapter
 
-The 167,838,575-byte selected adapter is distributed as the private GitHub
-release asset
-`loraforge-selected-adapter-epoch2.tar.gz` under
+The 167,838,575-byte selected adapter is distributed as ordered release parts
+under
 [v1.0-evidence](https://github.com/mghadia1/loraforge-llm/releases/tag/v1.0-evidence).
-The same release includes `loraforge-training-adapters-evidence.tar.gz`, which
-restores both epoch checkpoints and the selected copy required by the strict
-training verifier. Epoch 2 and `selected` are hard-linked in that archive to
-avoid storing identical weights twice.
-Its archive and inner-file hashes are pinned in
+Reassemble them in filename order:
+
+```bash
+cat loraforge-selected-adapter-epoch2.tar.gz.part-* > loraforge-selected-adapter-epoch2.tar.gz
+shasum -a 256 loraforge-selected-adapter-epoch2.tar.gz
+tar -xzf loraforge-selected-adapter-epoch2.tar.gz
+```
+
+The expected archive digest is
+`206aa291ff32904eff9569c40a8265182a227a9ec9e46e64e9a38f1e4f800603`.
+All part, archive, and inner-file hashes are pinned in
 [`docs/evidence/selected-adapter-release.json`](docs/evidence/selected-adapter-release.json).
 The large weights are intentionally excluded from normal Git history.
 

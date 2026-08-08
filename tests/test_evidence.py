@@ -191,6 +191,37 @@ def test_modified_adapter_file_is_rejected(tmp_path) -> None:
         )
 
 
+def test_reports_only_verification_does_not_require_adapter_directories(tmp_path) -> None:
+    make_training_run(tmp_path)
+    for directory in ("epoch-1", "epoch-2", "selected"):
+        for item in (tmp_path / "adapters" / directory).iterdir():
+            item.unlink()
+        (tmp_path / "adapters" / directory).rmdir()
+
+    selected = verify_training_report(
+        read_json(tmp_path / "outputs" / "training-report.json"),
+        root=tmp_path,
+        labels=LABELS,
+        verify_adapters=False,
+    )
+    assert selected["epoch"] == 2
+
+
+def test_reports_only_rejects_edited_selected_adapter_hashes(tmp_path) -> None:
+    make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = read_json(path)
+    report["selection"]["selected_adapter_hashes"]["combined_sha256"] = "0" * 64
+
+    with pytest.raises(EvidenceError, match="selected adapter hashes"):
+        verify_training_report(
+            report,
+            root=tmp_path,
+            labels=LABELS,
+            verify_adapters=False,
+        )
+
+
 def test_report_claiming_the_wrong_epoch_is_rejected(tmp_path) -> None:
     make_training_run(tmp_path)
     path = tmp_path / "outputs" / "training-report.json"

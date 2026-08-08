@@ -81,9 +81,10 @@ artifact remains unchanged as part of the audit trail.
 - `docs/evidence/selected-adapter-release.json`: release archive and inner
   adapter hashes.
 
-The release provides a small selected-only inference archive and a separate
-training-evidence archive containing both epoch checkpoints. The latter is
-required for the strict training verifier.
+The release provides the selected inference adapter as ordered, hash-pinned
+parts. `loraforge verify --reports-only` reproduces numerical claims from the
+tracked logits; strict verification additionally requires the owner-maintained
+epoch checkpoint archive.
 
 The final verifier output was:
 

@@ -44,7 +44,11 @@ def recompute_block(logits: np.ndarray, labels: list[int], recorded: dict[str, A
 
 
 def verify_training_report(
-    report: dict[str, Any], *, root: Path = Path("."), labels: list[int] | None = None
+    report: dict[str, Any],
+    *,
+    root: Path = Path("."),
+    labels: list[int] | None = None,
+    verify_adapters: bool = True,
 ) -> dict[str, Any]:
     """Re-derive selection and every validation metric from the saved logits."""
     from .training import select_checkpoint
@@ -57,9 +61,10 @@ def verify_training_report(
     for entry in report["epochs"]:
         logits = load_logits(entry["validation_logits"], root=root)
         recompute_block(logits, labels, entry["validation"], f"epoch-{entry['epoch']}")
-        stored = sha256_directory(root / entry["adapter_dir"])["combined_sha256"]
-        if stored != entry["adapter_hashes"]["combined_sha256"]:
-            raise EvidenceError(f"epoch-{entry['epoch']} adapter files changed since training")
+        if verify_adapters:
+            stored = sha256_directory(root / entry["adapter_dir"])["combined_sha256"]
+            if stored != entry["adapter_hashes"]["combined_sha256"]:
+                raise EvidenceError(f"epoch-{entry['epoch']} adapter files changed since training")
         records.append(entry)
 
     selected = select_checkpoint(records)
@@ -68,12 +73,15 @@ def verify_training_report(
             f"report selects epoch {report['selection']['selected_epoch']} but the rule "
             f"selects epoch {selected['epoch']}"
         )
-    selected_dir = root / report["selection"]["selected_adapter_dir"]
-    if (
-        sha256_directory(selected_dir)["combined_sha256"]
-        != selected["adapter_hashes"]["combined_sha256"]
-    ):
-        raise EvidenceError("adapters/selected does not match the selected epoch checkpoint")
+    if report["selection"]["selected_adapter_hashes"] != selected["adapter_hashes"]:
+        raise EvidenceError("selected adapter hashes do not match the selected epoch")
+    if verify_adapters:
+        selected_dir = root / report["selection"]["selected_adapter_dir"]
+        if (
+            sha256_directory(selected_dir)["combined_sha256"]
+            != selected["adapter_hashes"]["combined_sha256"]
+        ):
+            raise EvidenceError("adapters/selected does not match the selected epoch checkpoint")
     return selected
 
 
