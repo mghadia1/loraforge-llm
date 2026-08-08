@@ -1,98 +1,96 @@
-# Status — August 6, 2026
+# Status — August 8, 2026
 
-- Build steps 1–3 implementation (Codex): complete.
-- Build steps 4–6 implementation (Claude): complete, GPU-free and unexecuted.
-- Real dataset development evidence: complete; test not loaded.
-- GPU execution of untuned validation baseline: **pending T4**.
-- GPU execution of QLoRA parameter/memory audit: **pending T4**.
-- GPU execution of training and the single final test: **pending T4**.
-- Tests: 38 passing locally, all GPU-free.
-- Resume eligible: no — no measured result exists, and the explanation gate in
-  `docs/LEARNING_GUIDE.md` has not been attempted.
+## Completion
 
-Verified development split:
+- Implementation: complete.
+- Phase-one T4 baseline and QLoRA setup: complete.
+- Two-epoch QLoRA training: complete.
+- Validation-only checkpoint selection: complete; epoch 2 selected.
+- Frozen validation-only calibration: complete.
+- Single publisher-test evaluation: complete.
+- Local evidence verification: complete.
+- Selected-adapter release package: prepared.
+- Résumé eligible: **no** until Mayank passes the oral explanation gate.
 
-- train: 8,000, exactly 2,000 per class, digest
-  `0ec701367f1111d94a659335a9c3e811683a407e32350a4865e53f43bdfeaa5d`;
-- validation: 2,000, exactly 500 per class, digest
-  `bd9922811b0418edba481a1f73fede5a202f934133ebac6a0cf866bdb2143c7c`;
-- publisher test: 7,600 declared by the pinned dataset, not loaded by the
-  development evidence command.
+The repository contains a single completed experiment. No test result was used
+to alter its prompt, data, model, hyperparameters, checkpoint, or calibration
+temperature.
 
-## Correction to the frozen first half — August 7, 2026
+## Verified headline result
 
-The first T4 attempt crashed in `score_class_codes`. Current transformers return
-a `BatchEncoding` from `apply_chat_template(tokenize=True)`, not a flat list of
-token IDs. Three consequences, all now fixed by `prompts.prompt_token_ids`,
-which normalizes list, dict, and batch-of-one returns:
+| System | Publisher-test accuracy | Publisher-test macro-F1 |
+|---|---:|---:|
+| Untuned Mistral 7B | 0.7428 | 0.7262 |
+| Selected epoch-2 QLoRA | **0.9333** | **0.9333** |
 
-1. baseline scoring raised `ValueError` in `tokenizer.pad`;
-2. `encode_supervised_example` would have built training sequences out of dict
-   *keys* rather than tokens;
-3. the "prompt exceeds `max_sequence_length`" guard compared the length of a
-   two-key mapping against 512, so it could never fire.
+Macro-F1 delta: **+0.2071**. Final evaluation count: **1**.
 
-This changes no frozen fact — same prompt wording, same token IDs, same 512
-limit. It only makes the code produce what the protocol already specified. Tests
-now cover all three tokenizer return shapes and the oversized-prompt rejection.
+See [results.md](results.md) for per-class metrics, calibration, runtime, and
+limitations.
 
-Open question for the rerun: `docs/evidence/token-length-audit.json` (median
-127, p95 160, max 432) predates this fix. The live guard in
-`encode_supervised_example` now re-checks every row against 512 during training,
-so a stale audit cannot let a truncated row through silently.
+## Verified development protocol
 
-## Second correction — the trainable percentage, August 7, 2026
+- Train: 8,000 rows, exactly 2,000 per class; digest
+  `0ec701367f1111d94a659335a9c3e811683a407e32350a4865e53f43bdfeaa5d`.
+- Validation: 2,000 rows, exactly 500 per class; digest
+  `bd9922811b0418edba481a1f73fede5a202f934133ebac6a0cf866bdb2143c7c`.
+- Publisher test: 7,600 rows, accessed after selection was frozen.
+- Base validation compatibility check: 0.000034 macro-F1 difference between
+  phase-one and phase-two scoring, under the frozen 0.005 tolerance.
+- Epoch 1 validation macro-F1: 0.9248.
+- Epoch 2 validation macro-F1: 0.9310; selected.
 
-`outputs/qlora-setup.json` from the first T4 run records
-`trainable_percent: 1.1036754331979965`. **Do not quote that number.** It counts
-bitsandbytes `Params4bit` tensors by `numel()`, which returns stored elements —
-two 4-bit weights live in one byte — so the denominator is roughly half the real
-parameter count. That is why the artifact's `total_parameters` reads
-3,800,305,664 for a model with about 7.25 billion parameters.
+## Audit corrections preserved
 
-The numerator is sound: 41,943,040 trainable LoRA parameters, held in fp16 and
-not packed. Against Mistral 7B's real 7,248,023,552 parameters that is
-**0.5787%**. `parameter_report` now unpacks 4-bit tensors, reports the raw
-`numel()` sum separately as `stored_tensor_elements`, and a test fails if the
-packed count is ever used as the denominator again.
+### Tokenizer compatibility
 
-The recorded artifact is left exactly as the GPU produced it. The corrected
-count will appear in `outputs/training-report.json` on the next run.
+The first T4 attempt exposed a Transformers return-shape change:
+`apply_chat_template(tokenize=True)` returned a `BatchEncoding`. The prompt
+normalizer and manual left-padding path now accept the supported return shapes,
+and regression tests cover the original failure.
 
-## Scoring optimization — August 7, 2026
+### Packed 4-bit parameter denominator
 
-`score_class_codes` now asks the model to apply the LM head to the final
-position only (`logits_to_keep=1`, or `num_logits_to_keep` on older
-transformers), instead of computing a `[batch, 512, 32768]` logit tensor and
-discarding all but one row. The kwarg is discovered by walking the PEFT wrapper
-chain; if no version supports it the call falls back to full logits, and the
-returned last-position logits are identical either way.
+`outputs/qlora-setup.json` remains unedited and reports 1.1037% trainable
+parameters. That percentage is not quoted as a result: packed 4-bit
+`Params4bit.numel()` undercounted the full denominator. The valid numerator is
+41,943,040 trainable LoRA weights; the corrected unpacked fraction is 0.5787%.
+The code and tests now reject the packed denominator.
 
-This is a compute path change made *after* `outputs/base-validation.json` was
-recorded, so the phase-2 re-score of the base model may differ from macro-F1
-0.7299 in the last few decimals. `check_baseline_agreement` allows 0.005, which
-absorbs kernel-level differences while still catching a changed prompt,
-tokenizer, or model revision. If the re-score disagrees by more than that, the
-run aborts before training rather than reporting an unexplained shift.
+### Efficient final-position scoring
 
-## What runs next, in order
+The scorer applies the LM head only to the final sequence position when the
+installed Transformers version supports it. It falls back safely on older
+versions. The phase-two base compatibility gate demonstrated that this compute
+optimization did not change the experimental contract.
 
-1. `notebooks/loraforge_t4.ipynb` on a Colab/Kaggle T4 → `outputs/base-validation.json`
-   and `outputs/qlora-setup.json`, restored into the repository.
-2. `notebooks/loraforge_t4_phase2.ipynb` → training, `outputs/training-report.json`,
-   `adapters/selected/`, `outputs/frozen-selection.json`, then one
-   `outputs/final-test-report.json`.
-3. `loraforge verify` locally, reproducing every number from the stored logits.
-4. Only then: fill results into the README, and only after the oral gate does
-   anything reach the résumé or the site.
+## Evidence inventory
 
-## Artifacts and who writes them
+| Artifact | Status |
+|---|---|
+| `docs/evidence/data-stats.json` | tracked |
+| `outputs/base-validation.json` | tracked |
+| `outputs/qlora-setup.json` | tracked, with documented percentage correction |
+| `outputs/training-report.json` | verified |
+| `outputs/frozen-selection.json` | verified, test-evaluated marker true |
+| `outputs/final-test-report.json` | verified |
+| `outputs/logits/*.npy` | verified against recorded array hashes |
+| selected adapter | release asset; inner and archive hashes pinned |
 
-| Artifact | Written by | Exists |
-|---|---|---|
-| `docs/evidence/*.json` | phase-1 local commands | yes |
-| `outputs/base-validation.json` | phase-1 notebook (T4) | no |
-| `outputs/qlora-setup.json` | phase-1 notebook (T4) | no |
-| `outputs/training-report.json`, `adapters/` | `loraforge train` (T4) | no |
-| `outputs/frozen-selection.json` | `loraforge freeze-selection` | no |
-| `outputs/final-test-report.json` | `loraforge final-test` (T4, once) | no |
+The local verifier independently returned:
+
+```text
+training_report: verified, selected_epoch: 2
+final_test_report: verified
+base macro_f1: 0.7261902147623102
+tuned macro_f1: 0.9332520991438105
+macro_f1_delta: 0.2070618843815003
+```
+
+## Remaining human gate
+
+The experiment is technically complete. Publication to the résumé or portfolio
+remains blocked until Mayank answers all twelve questions in
+[`LEARNING_GUIDE.md`](LEARNING_GUIDE.md) unaided. The candidate wording is in
+[`RESUME_CANDIDATE.md`](RESUME_CANDIDATE.md), but it must not be copied into an
+application before that gate is passed.

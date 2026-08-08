@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "release_tag": "v1.0-evidence",
+  "asset_name": "loraforge-selected-adapter-epoch2.tar.gz",
+  "archive_bytes": 155529693,
+  "archive_sha256": "206aa291ff32904eff9569c40a8265182a227a9ec9e46e64e9a38f1e4f800603",
+  "training_evidence_asset": {
+    "asset_name": "loraforge-training-adapters-evidence.tar.gz",
+    "archive_bytes": 311076112,
+    "archive_sha256": "39124948baea8da6e70273d9fd469556b7608bb68dab3ce2e58e329ac8c26a3d",
+    "contents": [
+      "adapters/epoch-1",
+      "adapters/epoch-2",
+      "adapters/selected"
+    ],
+    "note": "epoch-2 and selected are byte-identical and stored as hard links in the archive"
+  },
+  "selected_epoch": 2,
+  "adapter_directory": "adapters/selected",
+  "adapter_directory_hash": {
+    "files": {
+      "README.md": "4da07bf97366bd915c95551a3dcc7fd3692926427cc132d5ebd1b79edcef6a08",
+      "adapter_config.json": "cc8ca81026875f295589df5b339bbc0ffff408c845f2b9fc460c4bf15185aeea",
+      "adapter_model.safetensors": "fe723117e42797117be42788351211338c8060759e4ddf63a7553a04d6ff1669"
+    },
+    "combined_sha256": "d60752caa319948649e79e9604baa5ac658cb6649bb6a1cb259a9321ae2d19b5",
+    "total_bytes": 167838575
+  },
+  "base_model": "mistralai/Mistral-7B-Instruct-v0.3",
+  "base_model_revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+  "note": "The adapter requires the pinned base model; it is not a merged or standalone model."
+}

@@ -1,5 +1,8 @@
 # First-half completion report
 
+> Historical pre-GPU report. The experiment has since completed; see
+> `docs/results.md` and `docs/STATUS.md` for verified measurements.
+
 Completed by Codex on August 6, 2026.
 
 ## Delivered

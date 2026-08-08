@@ -5,6 +5,20 @@ until Mayank can answer every question in the gate below **unaided** — no note
 no reading from this file. Passing tests is not the gate. Measured numbers are
 not the gate. The gate is being able to defend the work in an interview.
 
+## Numbers you must be able to explain
+
+- Validation selected epoch 2: 0.9310 macro-F1.
+- Publisher test: base 0.7262, tuned 0.9333, delta +0.2071.
+- Test accuracy: 0.7428 to 0.9333.
+- Tuned test ECE: 0.0290 before validation-fitted temperature scaling and
+  0.0078 after.
+- Two-epoch T4 training time: about 3 hours 38 minutes.
+- Selected adapter: 167,838,575 bytes; 41,943,040 trainable LoRA weights.
+
+Memorizing these values is insufficient. You must connect each number to the
+artifact that produced it and explain why the protocol makes the comparison
+credible.
+
 ## Read in this order
 
 1. `docs/how-it-works.md` — the whole protocol in one pass.

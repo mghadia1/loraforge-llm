@@ -44,8 +44,11 @@ Its weights stay frozen. PEFT adds rank-16 `A` and `B` matrices to attention and
 MLP projection layers. The audit recomputes trainable and total parameters and
 raises if any trainable parameter name is not a LoRA adapter.
 
-No local claim says this fits a T4. That becomes evidence only after the T4
-notebook records the GPU model, allocated/peak memory, and trainable percentage.
+The completed run used a Tesla T4. The phase-one setup reached 12.34 GiB peak
+CUDA allocation; the training report records 5.77 GiB peak after its own memory
+reset. The selected adapter contains 41,943,040 trainable LoRA weights and is
+167,838,575 bytes on disk. The original setup artifact's packed-4-bit
+denominator error is preserved and explained in `results.md`.
 
 ## Evaluation boundary
 
@@ -99,3 +102,12 @@ logits, the invalid-output rate is 0 by construction; that is a property of the
 scoring design, not a result. A failure during test scoring is written to
 `outputs/failed-attempts/` rather than retried silently, and a negative delta is
 reported exactly like a positive one.
+
+## Measured outcome
+
+Epoch 2 won on validation with 0.9310 macro-F1. In the single 7,600-row
+publisher-test evaluation, the untuned base scored 0.7262 macro-F1 and the
+selected adapter scored 0.9333, a +0.2071 difference. The final verifier
+recomputed both results from stored logits and matched their recorded hashes.
+Calibration reduced tuned ECE from 0.0290 to 0.0078 without changing a single
+prediction. Full results and limitations are in `docs/results.md`.
