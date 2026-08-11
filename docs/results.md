@@ -65,9 +65,15 @@ Business; QLoRA substantially reduced that error mode.
 
 The first phase-one setup artifact reports a misleading 1.1037% trainable
 percentage because bitsandbytes' packed `Params4bit.numel()` undercounts the
-base denominator. The numerator is valid. Against Mistral 7B's unpacked
-7,248,023,552 parameters, the corrected fraction is 0.5787%. The original
+base denominator; the code and tests now reject that packed count. The original
 artifact remains unchanged as part of the audit trail.
+
+**The measured quantity is the numerator: 41,943,040 trainable adapter
+parameters — roughly 0.6% of a 7B model.** No artifact in this repository
+records the unpacked denominator, so a precise percentage would rest on
+Mistral's published parameter count rather than on something measured here.
+`parameter_report` now runs inside training and will record the audited count
+directly on the next run.
 
 ## Evidence trail
 

@@ -23,6 +23,7 @@ from .provenance import (
     utc_now,
     write_json,
 )
+from .qlora import parameter_report
 
 
 # Loose enough to survive a few rows flipping on non-deterministic 4-bit kernels
@@ -151,6 +152,9 @@ def train_qlora(
         )
 
     torch.manual_seed(config.data.seed)
+    # Audit first: this raises if any non-adapter weight is trainable, which is
+    # worth catching in seconds rather than after hours of training.
+    parameters = parameter_report(model)
     features = build_supervised_features(
         tokenizer, bundle.train, max_length=config.training.max_sequence_length
     )
@@ -207,6 +211,7 @@ def train_qlora(
         "model_revision": config.model_revision,
         "config": config.to_dict(),
         "environment": environment(),
+        "parameters": parameters,
         "test_evaluated": False,
         "train_rows": len(bundle.train),
         "validation_rows": len(bundle.validation),
