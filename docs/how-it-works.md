@@ -82,10 +82,11 @@ wall time, peak CUDA memory, package versions, and adapter hashes land in
 
 Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
-logits, logits are checked against their SHA-256, adapters are checked against
-their directory hash, and the selected epoch is re-derived from the rule rather
-than trusted. Editing a macro-F1 by hand in a report makes verification fail —
-which is the point. The GPU-free tests include exactly those tamper cases.
+logits down to per-class precision/recall/F1 and every calibration bin, logits
+are checked against their SHA-256, adapters are checked against their directory
+hash, and the selected epoch is re-derived from the rule rather than trusted.
+Editing any stored metric by hand in a report makes verification fail — which
+is the point. The GPU-free tests include exactly those tamper cases.
 
 ## The one test evaluation
 

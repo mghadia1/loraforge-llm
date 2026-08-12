@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -24,23 +25,57 @@ FROZEN_SELECTION = Path("outputs/frozen-selection.json")
 
 
 def _assert_close(name: str, recorded: float, recomputed: float) -> None:
-    if abs(float(recorded) - float(recomputed)) > METRIC_TOLERANCE:
+    recorded_value = float(recorded)
+    recomputed_value = float(recomputed)
+    if (
+        not math.isfinite(recorded_value)
+        or not math.isfinite(recomputed_value)
+        or abs(recorded_value - recomputed_value) > METRIC_TOLERANCE
+    ):
         raise EvidenceError(
             f"{name} recorded as {recorded} but its own logits recompute to {recomputed}"
+        )
+
+
+def _assert_metric_tree(name: str, recorded: Any, recomputed: Any) -> None:
+    """Compare a complete metric tree, using tolerance only for finite floats."""
+    if isinstance(recomputed, dict):
+        if not isinstance(recorded, dict):
+            raise EvidenceError(f"{name} must be a metrics object")
+        missing = recomputed.keys() - recorded.keys()
+        unexpected = recorded.keys() - recomputed.keys()
+        if missing or unexpected:
+            raise EvidenceError(
+                f"{name} metric fields differ: missing={sorted(missing)}, "
+                f"unexpected={sorted(unexpected)}"
+            )
+        for key, value in recomputed.items():
+            _assert_metric_tree(f"{name}.{key}", recorded[key], value)
+        return
+    if isinstance(recomputed, list):
+        if not isinstance(recorded, list) or len(recorded) != len(recomputed):
+            raise EvidenceError(
+                f"{name} recorded length does not match its own logits"
+            )
+        for index, value in enumerate(recomputed):
+            _assert_metric_tree(f"{name}[{index}]", recorded[index], value)
+        return
+    if isinstance(recomputed, float):
+        try:
+            _assert_close(name, recorded, recomputed)
+        except (TypeError, ValueError) as error:
+            raise EvidenceError(f"{name} must be a finite number") from error
+        return
+    if recorded != recomputed:
+        raise EvidenceError(
+            f"{name} recorded as {recorded!r} but its own logits recompute to {recomputed!r}"
         )
 
 
 def recompute_block(logits: np.ndarray, labels: list[int], recorded: dict[str, Any], name: str) -> None:
     """Recompute a metrics block from raw logits and reject any hand-edited number."""
     fresh = evaluation_block(logits, labels, temperature=recorded.get("temperature", 1.0))
-    _assert_close(f"{name}.macro_f1", recorded["macro_f1"], fresh["macro_f1"])
-    _assert_close(f"{name}.accuracy", recorded["accuracy"], fresh["accuracy"])
-    _assert_close(f"{name}.nll", recorded["nll"], fresh["nll"])
-    _assert_close(
-        f"{name}.calibration.ece", recorded["calibration"]["ece"], fresh["calibration"]["ece"]
-    )
-    if recorded["confusion_matrix"] != fresh["confusion_matrix"]:
-        raise EvidenceError(f"{name}.confusion_matrix does not match its own logits")
+    _assert_metric_tree(name, recorded, fresh)
 
 
 def verify_training_report(

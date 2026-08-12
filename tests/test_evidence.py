@@ -170,6 +170,16 @@ def test_hand_edited_macro_f1_in_the_training_report_is_rejected(tmp_path) -> No
         verify_training_report(read_json(path), root=tmp_path, labels=LABELS)
 
 
+def test_hand_edited_per_class_metric_is_rejected(tmp_path) -> None:
+    make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = read_json(path)
+    report["epochs"][1]["validation"]["per_class"]["World"]["recall"] = 0.99
+
+    with pytest.raises(EvidenceError, match=r"epoch-2\.per_class\.World\.recall"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
 def test_swapped_logits_file_is_rejected_by_its_hash(tmp_path) -> None:
     make_training_run(tmp_path)
     np.save(
@@ -283,6 +293,21 @@ def test_edited_final_test_number_is_rejected(tmp_path) -> None:
     report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"] = 0.999
     write_json(report, path)
     with pytest.raises(EvidenceError, match="tuned.before.macro_f1"):
+        verify_final_report(root=tmp_path, labels=LABELS)
+
+
+def test_edited_calibration_bin_is_rejected(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    bins = report["systems"]["tuned"]["metrics_after_temperature"]["calibration"]["bins"]
+    populated = next(item for item in bins if item["average_confidence"] is not None)
+    populated["average_confidence"] += 0.1
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match=r"tuned\.after\.calibration\.bins"):
         verify_final_report(root=tmp_path, labels=LABELS)
 
 
