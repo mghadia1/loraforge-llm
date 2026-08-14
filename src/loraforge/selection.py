@@ -197,6 +197,65 @@ def build_frozen_selection(
     return frozen
 
 
+def verify_frozen_selection(
+    *, root: Path = Path("."), labels: list[int] | None = None
+) -> dict[str, float]:
+    """Re-fit validation temperatures and verify the complete frozen calibration gate."""
+    root = Path(root)
+    report = read_json(root / TRAINING_REPORT)
+    labels = _validation_labels(report, root, labels)
+    selected = verify_training_report(
+        report, root=root, labels=labels, verify_adapters=False
+    )
+    frozen = read_json(root / FROZEN_SELECTION)
+
+    expected_gate = {
+        "model": report["model"],
+        "model_revision": report["model_revision"],
+        "selected_epoch": selected["epoch"],
+        "selected_adapter_dir": report["selection"]["selected_adapter_dir"],
+        "selected_adapter_hashes": report["selection"]["selected_adapter_hashes"],
+        "selection_rule": report["selection"]["rule"],
+        "validation_label_sha256": report["validation_label_sha256"],
+    }
+    for field, expected in expected_gate.items():
+        if frozen.get(field) != expected:
+            raise EvidenceError(f"frozen selection {field} does not match training evidence")
+
+    sources = {
+        "base": (report["base_validation_logits"], report["base_validation_metrics"]),
+        "tuned": (selected["validation_logits"], selected["validation"]),
+    }
+    temperatures = {}
+    for name, (logits_reference, metrics) in sources.items():
+        recorded = frozen["validation"][name]
+        if recorded["logits"] != logits_reference:
+            raise EvidenceError(
+                f"frozen {name} validation logits do not match training evidence"
+            )
+        _assert_metric_tree(f"frozen.{name}.metrics", recorded["metrics"], metrics)
+        logits = load_logits(logits_reference, root=root)
+        fitted_temperature = fit_temperature(logits, labels)
+        _assert_close(
+            f"frozen.{name}.temperature",
+            recorded["temperature"],
+            fitted_temperature,
+        )
+        _assert_close(
+            f"frozen.{name}.metrics_after_temperature.temperature",
+            recorded["metrics_after_temperature"]["temperature"],
+            fitted_temperature,
+        )
+        recompute_block(
+            logits,
+            labels,
+            recorded["metrics_after_temperature"],
+            f"frozen.{name}.metrics_after_temperature",
+        )
+        temperatures[name] = fitted_temperature
+    return temperatures
+
+
 def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
     """Load the gate file and refuse to continue unless the adapter still matches it."""
     root = Path(root)

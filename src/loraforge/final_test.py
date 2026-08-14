@@ -21,7 +21,12 @@ from .provenance import (
     utc_now,
     write_json,
 )
-from .selection import METRIC_TOLERANCE, recompute_block, require_frozen_selection
+from .selection import (
+    METRIC_TOLERANCE,
+    recompute_block,
+    require_frozen_selection,
+    verify_frozen_selection,
+)
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
 CONFIRMATION = "i-am-running-the-single-final-test"
@@ -165,14 +170,18 @@ def run_final_test(
 
 
 def verify_final_report(
-    *, root: Path = Path("."), labels: list[int] | None = None
+    *,
+    root: Path = Path("."),
+    labels: list[int] | None = None,
+    validation_labels: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Recompute every headline test number from the stored logits and hashes."""
+    """Recompute test metrics and prove calibration came from validation."""
     root = Path(root)
     report = read_json(root / FINAL_REPORT)
     if report.get("test_evaluations_run") != 1:
         raise EvidenceError("the final report must record exactly one test evaluation")
     frozen = read_json(root / "outputs" / "frozen-selection.json")
+    fitted_temperatures = verify_frozen_selection(root=root, labels=validation_labels)
     if (
         frozen["selected_adapter_hashes"]["combined_sha256"]
         != report["selected_adapter_hashes"]["combined_sha256"]
@@ -190,6 +199,26 @@ def verify_final_report(
 
     checked = {}
     for name, system in report["systems"].items():
+        for field, recorded_temperature in (
+            ("validation_fitted_temperature", system["validation_fitted_temperature"]),
+            (
+                "metrics_after_temperature.temperature",
+                system["metrics_after_temperature"]["temperature"],
+            ),
+        ):
+            try:
+                difference = abs(
+                    float(recorded_temperature) - fitted_temperatures[name]
+                )
+            except (TypeError, ValueError) as error:
+                raise EvidenceError(f"{name}.{field} must be a finite number") from error
+            if (
+                not np.isfinite(float(recorded_temperature))
+                or difference > METRIC_TOLERANCE
+            ):
+                raise EvidenceError(
+                    f"{name}.{field} does not match the temperature fitted on validation"
+                )
         logits = load_logits(system["logits"], root=root)
         recompute_block(logits, labels, system["metrics_before_temperature"], f"{name}.before")
         recompute_block(logits, labels, system["metrics_after_temperature"], f"{name}.after")

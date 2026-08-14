@@ -85,8 +85,11 @@ Every reported number is recomputable from raw logits stored next to it, and
 logits down to per-class precision/recall/F1 and every calibration bin, logits
 are checked against their SHA-256, adapters are checked against their directory
 hash, and the selected epoch is re-derived from the rule rather than trusted.
-Editing any stored metric by hand in a report makes verification fail — which
-is the point. The GPU-free tests include exactly those tamper cases.
+The verifier also re-fits both temperatures from the hash-checked validation
+logits, checks the frozen calibration metrics, and proves that the final report
+used those validation-fitted values. Editing any stored metric or calibration
+temperature by hand makes verification fail — which is the point. The GPU-free
+tests include exactly those tamper cases.
 
 ## The one test evaluation
 

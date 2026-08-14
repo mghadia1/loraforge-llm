@@ -279,7 +279,9 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
     make_final_report(tmp_path)
-    verified = verify_final_report(root=tmp_path, labels=LABELS)
+    verified = verify_final_report(
+        root=tmp_path, labels=LABELS, validation_labels=LABELS
+    )
     assert verified["verified"] is True
     assert verified["macro_f1_delta"] > 0
 
@@ -293,7 +295,33 @@ def test_edited_final_test_number_is_rejected(tmp_path) -> None:
     report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"] = 0.999
     write_json(report, path)
     with pytest.raises(EvidenceError, match="tuned.before.macro_f1"):
-        verify_final_report(root=tmp_path, labels=LABELS)
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_final_report_temperature_must_match_the_validation_gate(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["systems"]["tuned"]["validation_fitted_temperature"] = 2.0
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="temperature fitted on validation"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_frozen_temperature_is_refitted_from_validation_logits(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["validation"]["base"]["temperature"] = 2.0
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match=r"frozen\.base\.temperature"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 def test_edited_calibration_bin_is_rejected(tmp_path) -> None:
@@ -308,7 +336,7 @@ def test_edited_calibration_bin_is_rejected(tmp_path) -> None:
     write_json(report, path)
 
     with pytest.raises(EvidenceError, match=r"tuned\.after\.calibration\.bins"):
-        verify_final_report(root=tmp_path, labels=LABELS)
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 def test_inflated_delta_is_rejected(tmp_path) -> None:
@@ -320,7 +348,7 @@ def test_inflated_delta_is_rejected(tmp_path) -> None:
     report["delta"]["macro_f1"] = 0.5
     write_json(report, path)
     with pytest.raises(EvidenceError, match="delta does not match"):
-        verify_final_report(root=tmp_path, labels=LABELS)
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 def test_a_negative_result_still_verifies(tmp_path) -> None:
@@ -328,7 +356,9 @@ def test_a_negative_result_still_verifies(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
     make_final_report(tmp_path, tuned_margin=-0.5)
-    verified = verify_final_report(root=tmp_path, labels=LABELS)
+    verified = verify_final_report(
+        root=tmp_path, labels=LABELS, validation_labels=LABELS
+    )
     assert verified["macro_f1_delta"] < 0
     assert json.loads(Path(tmp_path / "outputs" / "final-test-report.json").read_text())[
         "test_evaluations_run"
