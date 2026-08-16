@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "model_name": "mistralai/Mistral-7B-Instruct-v0.3",
+  "model_revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+  "data": {
+    "dataset_name": "fancyzhx/ag_news",
+    "dataset_revision": "eb185aade064a813bc0b7f42de02595523103ca4",
+    "seed": 73,
+    "train_per_class": 4000,
+    "validation_per_class": 500,
+    "validation_start_per_class": 2000,
+    "publisher_test_rows": 7600
+  },
+  "quantization": {
+    "load_in_4bit": true,
+    "quant_type": "nf4",
+    "compute_dtype": "float16",
+    "use_double_quant": true
+  },
+  "lora": {
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "bias": "none",
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "training": {
+    "epochs": 1,
+    "learning_rate": 0.0002,
+    "per_device_train_batch_size": 2,
+    "per_device_eval_batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "warmup_ratio": 0.03,
+    "max_sequence_length": 512,
+    "gradient_checkpointing": true,
+    "optimizer": "paged_adamw_8bit",
+    "select_metric": "macro_f1"
+  },
+  "resume_eligible": false,
+  "test_evaluations_allowed": 0
+}

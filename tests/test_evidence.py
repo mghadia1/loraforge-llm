@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -265,6 +266,13 @@ def test_final_test_requires_the_explicit_confirmation(tmp_path) -> None:
     build_frozen_selection(root=tmp_path, labels=LABELS)
     with pytest.raises(EvidenceError, match="explicit confirmation"):
         run_final_test(default_config(), confirmation="yes", root=tmp_path)
+
+
+def test_validation_only_experiment_cannot_access_publisher_test(tmp_path) -> None:
+    config = replace(default_config(), test_evaluations_allowed=0)
+    config.validate()
+    with pytest.raises(EvidenceError, match="validation-only"):
+        run_final_test(config, confirmation=CONFIRMATION, root=tmp_path)
 
 
 def test_second_final_test_run_is_refused(tmp_path) -> None:

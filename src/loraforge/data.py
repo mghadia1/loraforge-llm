@@ -99,18 +99,29 @@ def deterministic_development_split(
 
     train: list[Example] = []
     validation: list[Example] = []
+    validation_start = (
+        config.train_per_class
+        if config.validation_start_per_class is None
+        else config.validation_start_per_class
+    )
+    validation_stop = validation_start + config.validation_per_class
     required = config.train_per_class + config.validation_per_class
     for label, items in grouped.items():
-        if len(items) < required:
-            raise ValueError(f"class {label} has {len(items)} rows; {required} required")
+        minimum_rows = max(required, validation_stop)
+        if len(items) < minimum_rows:
+            raise ValueError(
+                f"class {label} has {len(items)} rows; {minimum_rows} required"
+            )
         ordered = sorted(
             items,
             key=lambda item: hashlib.sha256(
                 f"{config.seed}\0{item.row_id}".encode("utf-8")
             ).hexdigest(),
         )
-        train.extend(ordered[: config.train_per_class])
-        validation.extend(ordered[config.train_per_class : required])
+        held_out = ordered[validation_start:validation_stop]
+        training_candidates = ordered[:validation_start] + ordered[validation_stop:]
+        train.extend(training_candidates[: config.train_per_class])
+        validation.extend(held_out)
 
     train.sort(key=lambda item: item.row_id)
     validation.sort(key=lambda item: item.row_id)
@@ -140,17 +151,28 @@ def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
     splits = [bundle.train, bundle.validation]
     if bundle.test is not None:
         splits.append(bundle.test)
+    selection = {
+        "seed": config.seed,
+        "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
+        "unused_publisher_train_rows": 120_000 - len(bundle.train) - len(bundle.validation),
+    }
+    if config.validation_start_per_class is not None:
+        selection.update(
+            {
+                "algorithm": (
+                    "per-class SHA-256 ordering; fixed validation window; "
+                    "training excludes validation; row-ID sort"
+                ),
+                "validation_start_per_class": config.validation_start_per_class,
+            }
+        )
     return {
         "schema_version": 1,
         "dataset": config.dataset_name,
         "dataset_revision": config.dataset_revision,
         "publisher_train_rows": 120_000,
         "publisher_test_rows": config.publisher_test_rows,
-        "selection": {
-            "seed": config.seed,
-            "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
-            "unused_publisher_train_rows": 120_000 - len(bundle.train) - len(bundle.validation),
-        },
+        "selection": selection,
         "classes": list(CLASS_NAMES),
         "splits": {
             split.name: {

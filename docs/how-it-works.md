@@ -25,6 +25,14 @@ reproducible 8,000/2,000 subsets without depending on a library RNG version.
 The publisher test split is absent unless a caller explicitly requests it. It
 must be loaded only after checkpoint and temperature selection are frozen.
 
+The validation window can also be pinned independently of the training count.
+The validation-only expanded-data preset keeps the original 500 rows per class
+at offsets 2,000–2,499, excludes them from training, and grows training to
+4,000 rows per class using the next deterministic candidates. One epoch over
+16,000 rows has the same 1,000 optimizer-step budget as two epochs over the
+original 8,000 rows. Its config disables publisher-test evaluation, so any
+comparison must remain on the unchanged validation split.
+
 ## Prompt loss
 
 The supervised sequence contains the system instruction, article, assistant

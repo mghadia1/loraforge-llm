@@ -21,6 +21,7 @@ class DataConfig:
     seed: int = 73
     train_per_class: int = 2_000
     validation_per_class: int = 500
+    validation_start_per_class: int | None = None
     publisher_test_rows: int = 7_600
 
 
@@ -86,11 +87,23 @@ class ExperimentConfig:
             raise ValueError("LoRA dropout must be in [0, 1)")
         if self.training.select_metric != "macro_f1":
             raise ValueError("adapter selection must use validation macro-F1")
-        if self.test_evaluations_allowed != 1:
-            raise ValueError("the frozen protocol permits exactly one final test evaluation")
+        if self.data.train_per_class <= 0 or self.data.validation_per_class <= 0:
+            raise ValueError("development split counts must be positive")
+        if (
+            self.data.validation_start_per_class is not None
+            and self.data.validation_start_per_class < 0
+        ):
+            raise ValueError("validation_start_per_class must be non-negative")
+        if self.test_evaluations_allowed not in (0, 1):
+            raise ValueError("an experiment permits zero or one final test evaluation")
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if payload["data"]["validation_start_per_class"] is None:
+            # Preserve the schema and hashes of the completed experiment. Older
+            # configs imply that validation starts after the training prefix.
+            payload["data"].pop("validation_start_per_class")
+        return payload
 
     def write(self, path: Path) -> None:
         self.validate()
@@ -100,5 +113,26 @@ class ExperimentConfig:
 
 def default_config() -> ExperimentConfig:
     config = ExperimentConfig()
+    config.validate()
+    return config
+
+
+def load_config(path: Path) -> ExperimentConfig:
+    """Load and validate a JSON experiment config with typed nested sections."""
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = DataConfig(**payload.pop("data"))
+    quantization = QuantizationConfig(**payload.pop("quantization"))
+    lora_payload = payload.pop("lora")
+    if "target_modules" in lora_payload:
+        lora_payload["target_modules"] = tuple(lora_payload["target_modules"])
+    lora = LoraConfig(**lora_payload)
+    training = TrainingConfig(**payload.pop("training"))
+    config = ExperimentConfig(
+        **payload,
+        data=data,
+        quantization=quantization,
+        lora=lora,
+        training=training,
+    )
     config.validate()
     return config

@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import default_config
+from .config import default_config, load_config
 from .data import describe, load_dataset, write_stats
 from .prompts import training_messages
 
@@ -17,13 +17,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("write-config", help="write the frozen experiment config")
     stats = commands.add_parser("data-stats", help="load real data without test and write stats")
     stats.add_argument("--output", type=Path, default=Path("docs/evidence/data-stats.json"))
+    stats.add_argument("--config", type=Path, help="validated experiment JSON")
     examples = commands.add_parser("examples", help="write three deterministic formatted examples")
     examples.add_argument(
         "--output", type=Path, default=Path("docs/evidence/formatted-examples.json")
     )
+    examples.add_argument("--config", type=Path, help="validated experiment JSON")
 
-    train = commands.add_parser("train", help="run the two frozen QLoRA epochs (needs a GPU)")
+    train = commands.add_parser("train", help="run configured QLoRA training (needs a GPU)")
     train.add_argument("--root", type=Path, default=Path("."))
+    train.add_argument("--config", type=Path, help="validated experiment JSON")
 
     freeze = commands.add_parser(
         "freeze-selection", help="verify training evidence and freeze the adapter plus temperatures"
@@ -34,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
         "final-test", help="the single publisher-test evaluation (needs a GPU and confirmation)"
     )
     final.add_argument("--root", type=Path, default=Path("."))
+    final.add_argument("--config", type=Path, help="validated experiment JSON")
     final.add_argument(
         "--confirm",
         default="",
@@ -54,7 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    config = default_config()
+    config_path = getattr(args, "config", None)
+    config = load_config(config_path) if config_path else default_config()
 
     if args.command == "write-config":
         output = Path("configs/experiment.json")
