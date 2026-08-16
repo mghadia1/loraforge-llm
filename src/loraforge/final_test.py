@@ -64,9 +64,9 @@ def run_final_test(
     from .modeling import attach_saved_adapter, load_quantized_base, score_class_codes
 
     root = Path(root)
-    if config.test_evaluations_allowed == 0:
+    if config.test_evaluations_allowed != 1:
         raise EvidenceError(
-            "this experiment is validation-only; publisher-test evaluation is disabled"
+            "this experiment is validation-only or invalid; publisher-test evaluation is disabled"
         )
     if confirmation != CONFIRMATION:
         raise EvidenceError(
