@@ -23,6 +23,7 @@ from .provenance import (
 )
 from .selection import (
     METRIC_TOLERANCE,
+    TRAINING_REPORT,
     recompute_block,
     require_frozen_selection,
     verify_frozen_selection,
@@ -184,25 +185,48 @@ def verify_final_report(
     report = read_json(root / FINAL_REPORT)
     if report.get("test_evaluations_run") != 1:
         raise EvidenceError("the final report must record exactly one test evaluation")
+    training_report = read_json(root / TRAINING_REPORT)
     frozen = read_json(root / "outputs" / "frozen-selection.json")
     fitted_temperatures = verify_frozen_selection(root=root, labels=validation_labels)
-    if (
-        frozen["selected_adapter_hashes"]["combined_sha256"]
-        != report["selected_adapter_hashes"]["combined_sha256"]
-    ):
-        raise EvidenceError("final report adapter hash does not match the frozen selection")
+
+    expected_provenance = {
+        "schema_version": 1,
+        "test_evaluated": True,
+        "split": "publisher test",
+        "model": frozen["model"],
+        "model_revision": frozen["model_revision"],
+        "selected_epoch": frozen["selected_epoch"],
+        "selected_adapter_hashes": frozen["selected_adapter_hashes"],
+        "config": training_report["config"],
+    }
+    for field, expected in expected_provenance.items():
+        if report.get(field) != expected:
+            raise EvidenceError(
+                f"final report {field} does not match the validated training and frozen evidence"
+            )
+    systems = report.get("systems")
+    if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
+        raise EvidenceError("final report must contain exactly the base and tuned systems")
 
     if labels is None:
         from .config import DataConfig
         from .data import load_dataset
 
-        bundle = load_dataset(allow_test=True, config=DataConfig(**report["config"]["data"]))
-        labels = bundle.require_test().labels
+        bundle = load_dataset(
+            allow_test=True,
+            config=DataConfig(**training_report["config"]["data"]),
+        )
+        test = bundle.require_test()
+        labels = test.labels
+        if test.id_sha256() != report.get("test_row_ids_sha256"):
+            raise EvidenceError("publisher-test row IDs do not match the final report")
+    if report.get("rows") != len(labels):
+        raise EvidenceError("final report row count does not match the publisher-test labels")
     if sha256_labels(labels) != report["test_label_sha256"]:
         raise EvidenceError("test labels no longer match the final report")
 
     checked = {}
-    for name, system in report["systems"].items():
+    for name, system in systems.items():
         for field, recorded_temperature in (
             ("validation_fitted_temperature", system["validation_fitted_temperature"]),
             (

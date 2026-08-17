@@ -106,8 +106,12 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
         "schema_version": 1,
         "test_evaluated": True,
         "test_evaluations_run": 1,
+        "split": "publisher test",
         "rows": len(LABELS),
         "test_label_sha256": sha256_labels(LABELS),
+        "model": frozen["model"],
+        "model_revision": frozen["model_revision"],
+        "selected_epoch": frozen["selected_epoch"],
         "config": default_config().to_dict(),
         "selected_adapter_hashes": frozen["selected_adapter_hashes"],
         "systems": {
@@ -316,6 +320,35 @@ def test_final_report_temperature_must_match_the_validation_gate(tmp_path) -> No
     write_json(report, path)
 
     with pytest.raises(EvidenceError, match="temperature fitted on validation"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("model",), "other/model", "model"),
+        (("model_revision",), "0" * 40, "model_revision"),
+        (("selected_epoch",), 1, "selected_epoch"),
+        (("selected_adapter_hashes", "total_bytes"), 0, "selected_adapter_hashes"),
+        (("config", "training", "epochs"), 99, "config"),
+        (("rows",), len(LABELS) - 1, "row count"),
+    ],
+)
+def test_final_report_provenance_must_match_frozen_evidence(
+    tmp_path, path, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    report_path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(report_path)
+    target = report
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+    write_json(report, report_path)
+
+    with pytest.raises(EvidenceError, match=message):
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
