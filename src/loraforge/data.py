@@ -123,16 +123,30 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
     config = config or DataConfig()
     from datasets import load_dataset as hf_load_dataset
 
-    raw = hf_load_dataset(config.dataset_name, revision=config.dataset_revision)
-    if len(raw["train"]) != 120_000 or len(raw["test"]) != config.publisher_test_rows:
-        raise ValueError("upstream AG News split sizes changed")
-    names = tuple(raw["train"].features["label"].names)
+    publisher_train = hf_load_dataset(
+        config.dataset_name,
+        revision=config.dataset_revision,
+        split="train",
+    )
+    if len(publisher_train) != 120_000:
+        raise ValueError("upstream AG News train split size changed")
+    names = tuple(publisher_train.features["label"].names)
     if names != CLASS_NAMES:
         raise ValueError(f"upstream class names changed: {names}")
-    train, validation = deterministic_development_split(raw["train"], config)
+    train, validation = deterministic_development_split(publisher_train, config)
     test = None
     if allow_test:
-        test = Split("test", tuple(_to_examples("test", raw["test"])))
+        publisher_test = hf_load_dataset(
+            config.dataset_name,
+            revision=config.dataset_revision,
+            split="test",
+        )
+        if len(publisher_test) != config.publisher_test_rows:
+            raise ValueError("upstream AG News test split size changed")
+        test_names = tuple(publisher_test.features["label"].names)
+        if test_names != CLASS_NAMES:
+            raise ValueError(f"upstream test class names changed: {test_names}")
+        test = Split("test", tuple(_to_examples("test", publisher_test)))
     return DatasetBundle(train=train, validation=validation, test=test)
 
 

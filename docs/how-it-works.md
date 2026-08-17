@@ -22,8 +22,10 @@ row IDs and are ordered by a seed-bound SHA-256. The first 2,000 per class form
 training; the next 500 form validation. This yields balanced, disjoint, exactly
 reproducible 8,000/2,000 subsets without depending on a library RNG version.
 
-The publisher test split is absent unless a caller explicitly requests it. It
-must be loaded only after checkpoint and temperature selection are frozen.
+The default loader asks Hugging Face for `split="train"` only; it does not even
+request the publisher test split. A caller must explicitly set `allow_test=True`,
+which makes a separate `split="test"` request after checkpoint and temperature
+selection are frozen.
 
 ## Prompt loss
 
