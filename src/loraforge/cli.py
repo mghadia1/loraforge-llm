@@ -44,6 +44,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="must be exactly 'i-am-running-the-single-final-test'",
     )
 
+    intervals = commands.add_parser(
+        "intervals",
+        help="bootstrap confidence intervals and paired analysis from the stored test run",
+    )
+    intervals.add_argument("--root", type=Path, default=Path("."))
+    intervals.add_argument("--resamples", type=int, default=2_000)
+    intervals.add_argument("--seed", type=int, default=73)
+
     verify = commands.add_parser(
         "verify", help="recompute stored metrics from stored logits and reject edited evidence"
     )
@@ -105,8 +113,24 @@ def main() -> int:
         }))
         return 0
 
+    if args.command == "intervals":
+        from .intervals import build_intervals
+
+        result = build_intervals(root=args.root, resamples=args.resamples, seed=args.seed)
+        delta = result["bootstrap"]["delta"]
+        print(json.dumps({
+            "delta": delta["delta"],
+            "ci": [delta["ci_lower"], delta["ci_upper"]],
+            "resamples_without_improvement": result["bootstrap"]["resamples_without_improvement"],
+            "fixed": result["paired"]["tuned_fixed_base_error"],
+            "broke": result["paired"]["tuned_broke_base_success"],
+            "new_test_evaluations": result["new_test_evaluations"],
+        }, indent=2))
+        return 0
+
     if args.command == "verify":
         from .final_test import verify_final_report
+        from .intervals import INTERVALS_REPORT, verify_intervals
         from .provenance import read_json
         from .selection import TRAINING_REPORT, verify_training_report
 
@@ -124,6 +148,8 @@ def main() -> int:
             }
         if (Path(args.root) / "outputs/final-test-report.json").exists():
             checked["final_test_report"] = verify_final_report(root=args.root)
+        if (Path(args.root) / INTERVALS_REPORT).exists():
+            checked["test_intervals"] = verify_intervals(root=args.root)
         if not checked:
             raise SystemExit("nothing to verify: no training or final-test report exists yet")
         print(json.dumps(checked, indent=2))
