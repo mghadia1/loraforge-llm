@@ -52,6 +52,23 @@ def build_parser() -> argparse.ArgumentParser:
     intervals.add_argument("--resamples", type=int, default=2_000)
     intervals.add_argument("--seed", type=int, default=73)
 
+    compare = commands.add_parser(
+        "compare-runs",
+        help="diff two training runs and refuse to call the comparison controlled if it is not",
+    )
+    compare.add_argument("baseline", type=Path, help="baseline training-report.json")
+    compare.add_argument("variant", type=Path, help="variant training-report.json")
+    compare.add_argument(
+        "--expect-change",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="dotted config field the ablation intends to change, e.g. lora.rank",
+    )
+    compare.add_argument(
+        "--strict", action="store_true", help="exit non-zero unless the comparison is controlled"
+    )
+
     verify = commands.add_parser(
         "verify", help="recompute stored metrics from stored logits and reject edited evidence"
     )
@@ -126,6 +143,17 @@ def main() -> int:
             "broke": result["paired"]["tuned_broke_base_success"],
             "new_test_evaluations": result["new_test_evaluations"],
         }, indent=2))
+        return 0
+
+    if args.command == "compare-runs":
+        from .compare import compare_report_files, require_controlled
+
+        comparison = compare_report_files(
+            args.baseline, args.variant, expected_config_changes=set(args.expect_change)
+        )
+        print(json.dumps(comparison, indent=2))
+        if args.strict:
+            require_controlled(comparison)
         return 0
 
     if args.command == "verify":

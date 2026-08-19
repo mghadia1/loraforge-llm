@@ -22,6 +22,16 @@ class LockedTestSplitError(PermissionError):
     """Raised when code touches the publisher test split before the final run."""
 
 
+class SplitLeakError(ValueError):
+    """Raised when a row used for training also appears in a split used to judge it.
+
+    Caught by hand once: growing the training set toward the publisher's full
+    120,000 rows would have swallowed the 2,000 validation rows, and every
+    selection decision made afterwards would have been scored on trained-on data.
+    A bare `assert` was not enough, since `python -O` removes it.
+    """
+
+
 @dataclass(frozen=True)
 class Example:
     row_id: str
@@ -125,9 +135,22 @@ def deterministic_development_split(
 
     train.sort(key=lambda item: item.row_id)
     validation.sort(key=lambda item: item.row_id)
-    if set(item.row_id for item in train) & set(item.row_id for item in validation):
-        raise AssertionError("development split overlap")
-    return Split("train", tuple(train)), Split("validation", tuple(validation))
+    train_split = Split("train", tuple(train))
+    validation_split = Split("validation", tuple(validation))
+    assert_disjoint(train_split, validation_split)
+    return train_split, validation_split
+
+
+def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
+    """Refuse any overlap between rows trained on and rows used to judge training."""
+    shared = {item.row_id for item in trained_on.examples} & {
+        item.row_id for item in judged_on.examples
+    }
+    if shared:
+        raise SplitLeakError(
+            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows also appear in "
+            f"{trained_on.name}; selection would be scored on trained-on data"
+        )
 
 
 def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) -> DatasetBundle:
@@ -144,7 +167,17 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
     test = None
     if allow_test:
         test = Split("test", tuple(_to_examples("test", raw["test"])))
-    return DatasetBundle(train=train, validation=validation, test=test)
+    bundle = DatasetBundle(train=train, validation=validation, test=test)
+    assert_no_leaks(bundle)
+    return bundle
+
+
+def assert_no_leaks(bundle: DatasetBundle) -> None:
+    """Check every split pair that could contaminate a decision, on every load."""
+    assert_disjoint(bundle.train, bundle.validation)
+    if bundle.test is not None:
+        assert_disjoint(bundle.train, bundle.test)
+        assert_disjoint(bundle.validation, bundle.test)
 
 
 def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
