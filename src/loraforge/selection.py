@@ -208,7 +208,6 @@ def verify_frozen_selection(
         report, root=root, labels=labels, verify_adapters=False
     )
     frozen = read_json(root / FROZEN_SELECTION)
-
     expected_gate = {
         "model": report["model"],
         "model_revision": report["model_revision"],

@@ -13,3 +13,4 @@ runs/
 # runs/ is excluded wholesale; commit a run's evidence with
 #   git add -f runs/<name>/outputs
 # and leave its adapters out (they ship as release assets).
+.DS_Store
