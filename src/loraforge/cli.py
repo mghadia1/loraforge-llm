@@ -69,6 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="exit non-zero unless the comparison is controlled"
     )
 
+    card = commands.add_parser(
+        "model-card",
+        help="generate a Hugging Face model card for a run's selected adapter",
+    )
+    card.add_argument("--root", type=Path, default=Path("."))
+    card.add_argument(
+        "--repo-url", default="https://github.com/mghadia1/loraforge-llm", help="source repository"
+    )
+
     verify = commands.add_parser(
         "verify", help="recompute stored metrics from stored logits and reject edited evidence"
     )
@@ -154,6 +163,13 @@ def main() -> int:
         print(json.dumps(comparison, indent=2))
         if args.strict:
             require_controlled(comparison)
+        return 0
+
+    if args.command == "model-card":
+        from .model_card import write_model_card
+
+        target = write_model_card(root=args.root, repo_url=args.repo_url)
+        print(json.dumps({"written": str(target), "bytes": target.stat().st_size}))
         return 0
 
     if args.command == "verify":
