@@ -19,6 +19,7 @@ from .metrics import softmax
 from .provenance import (
     EvidenceError,
     load_logits,
+    sha256_file,
     read_json,
     sha256_labels,
     utc_now,
@@ -150,11 +151,15 @@ def mcnemar(fixed: int, broken: int) -> dict[str, Any]:
         }
     chi_square = (abs(fixed - broken) - 1) ** 2 / discordant if discordant else 0.0
     log10_p = _log10_two_sided_binomial_tail(discordant, min(fixed, broken))
+    representable = log10_p > -300
     return {
         "discordant_pairs": discordant,
         "chi_square": float(chi_square),
         "log10_p_value": log10_p,
-        "p_value": float(10**log10_p) if log10_p > -300 else 0.0,
+        # No p-value is zero. When the exact tail underflows float64, report the
+        # bound instead of a number that would be false if quoted.
+        "p_value": float(10**log10_p) if representable else None,
+        "p_value_upper_bound": None if representable else 1e-300,
     }
 
 
@@ -208,6 +213,7 @@ def build_intervals(
         "schema_version": 1,
         "created_at_utc": utc_now(),
         "source_report": "outputs/final-test-report.json",
+        "source_report_sha256": sha256_file(root / "outputs/final-test-report.json"),
         "test_label_sha256": report["test_label_sha256"],
         "new_test_evaluations": 0,
         "scope": (
@@ -254,8 +260,29 @@ def verify_intervals(*, root: Path = Path("."), labels: list[int] | None = None)
                     f"bootstrap {name}.{key} recorded as {value} but recomputes to "
                     f"{recomputed[name][key]}"
                 )
+    # Everything else the file asserts is a claim too. Checking only the metric
+    # blocks once let a forged "0 of 2,000 resamples" and a forged
+    # new_test_evaluations pass verification untouched.
+    for field in ("resamples_without_improvement", "settings"):
+        if stored["bootstrap"][field] != recomputed[field]:
+            raise EvidenceError(
+                f"bootstrap {field} recorded as {stored['bootstrap'][field]} but "
+                f"recomputes to {recomputed[field]}"
+            )
     if stored["paired"] != paired_disagreement(label_array, base, tuned):
         raise EvidenceError("paired disagreement counts do not match their own logits")
+    if stored.get("new_test_evaluations") != 0:
+        raise EvidenceError(
+            "this analysis resamples a stored run and cannot have spent test budget; "
+            f"new_test_evaluations reads {stored.get('new_test_evaluations')!r}"
+        )
+    recorded_source = stored.get("source_report_sha256")
+    if recorded_source is not None:
+        actual_source = sha256_file(root / stored["source_report"])
+        if actual_source != recorded_source:
+            raise EvidenceError(
+                f"{stored['source_report']} changed since these intervals were computed"
+            )
     return {
         "verified": True,
         "delta": stored["bootstrap"]["delta"]["delta"],

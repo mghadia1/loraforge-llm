@@ -141,14 +141,34 @@ def deterministic_development_split(
     return train_split, validation_split
 
 
+def content_id(example: Example) -> str:
+    """Identity of a row by what it contains, independent of which split it came from.
+
+    `row_id` mixes the source split name into its digest, so the same article in
+    the publisher's train and test splits gets two different row_ids. Comparing
+    row_ids across splits therefore compares two namespaces that cannot intersect,
+    and the check silently passes no matter what the data holds. Content identity
+    is what a cross-split leak actually means.
+    """
+    payload = f"{example.label}\0{' '.join(example.text.split())}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
     """Refuse any overlap between rows trained on and rows used to judge training."""
-    shared = {item.row_id for item in trained_on.examples} & {
+    shared_rows = {item.row_id for item in trained_on.examples} & {
         item.row_id for item in judged_on.examples
     }
+    shared_content = {content_id(item) for item in trained_on.examples} & {
+        content_id(item) for item in judged_on.examples
+    }
+    shared = shared_rows or shared_content
     if shared:
+        kind = (
+            "also appear in" if shared_rows else "share identical article text and label with"
+        )
         raise SplitLeakError(
-            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows also appear in "
+            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows {kind} "
             f"{trained_on.name}; selection would be scored on trained-on data"
         )
 

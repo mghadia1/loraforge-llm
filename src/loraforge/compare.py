@@ -33,6 +33,15 @@ def differences(left: dict[str, Any], right: dict[str, Any]) -> dict[str, tuple[
     }
 
 
+def _selected_macro_f1(report: dict[str, Any]) -> float:
+    """Validation macro-F1 of the epoch this report says it selected."""
+    epoch = report["selection"]["selected_epoch"]
+    for entry in report["epochs"]:
+        if entry["epoch"] == epoch:
+            return entry["validation"]["macro_f1"]
+    raise EvidenceError(f"report selects epoch {epoch}, which is not among its epochs")
+
+
 def compare_runs(
     baseline: dict[str, Any],
     variant: dict[str, Any],
@@ -54,8 +63,11 @@ def compare_runs(
     blocking_packages = {k: v for k, v in package_drift.items() if k != "torch"}
     controlled = not blocking_packages and not unexpected_config and not missing_expected
 
-    baseline_best = max(e["validation"]["macro_f1"] for e in baseline["epochs"])
-    variant_best = max(e["validation"]["macro_f1"] for e in variant["epochs"])
+    # Read the checkpoint the selection rule actually chose. Taking the maximum
+    # would silently describe a different checkpoint whenever the documented
+    # tie-break (earlier epoch wins) disagrees with argmax.
+    baseline_best = _selected_macro_f1(baseline)
+    variant_best = _selected_macro_f1(variant)
     return {
         "controlled": controlled,
         "package_differences": package_drift,
@@ -67,6 +79,10 @@ def compare_runs(
             baseline["environment"].get("gpu_name"),
             variant["environment"].get("gpu_name"),
         ],
+        "selected_epoch": {
+            "baseline": baseline["selection"]["selected_epoch"],
+            "variant": variant["selection"]["selected_epoch"],
+        },
         "validation_macro_f1": {
             "baseline": baseline_best,
             "variant": variant_best,

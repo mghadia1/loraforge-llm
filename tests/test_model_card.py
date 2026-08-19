@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from loraforge.config import default_config
@@ -89,11 +91,32 @@ def test_limitations_name_the_cheap_baseline_and_the_missing_seed_variance(tmp_p
     assert "not a result" in card  # the constrained-decoding caveat
 
 
-def test_writing_the_card_lands_next_to_the_adapter(tmp_path) -> None:
+def test_writing_the_card_never_touches_the_adapter_directory(tmp_path) -> None:
+    """Writing into the adapter would invalidate the hash the whole chain rests on."""
+    from loraforge.provenance import sha256_directory
+
     make_run(tmp_path)
+    adapter = tmp_path / "adapters" / "selected"
+    before = sha256_directory(adapter)["combined_sha256"]
+
     target = write_model_card(root=tmp_path, repo_url="https://example.invalid/repo")
-    assert target == tmp_path / "adapters" / "selected" / "README.md"
+
+    assert target == tmp_path / "outputs" / "model-card.md"
     assert "https://example.invalid/repo" in target.read_text()
+    assert sha256_directory(adapter)["combined_sha256"] == before
+
+
+def test_an_unmeasured_parameter_count_is_stated_not_invented(tmp_path) -> None:
+    """A missing measurement once rendered as "Trainable parameters: **0**"."""
+    make_run(tmp_path)
+    report_path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(report_path.read_text())
+    del report["parameters"]
+    report_path.write_text(json.dumps(report))
+
+    card = build_model_card(root=tmp_path)
+    assert "Trainable parameters: **not recorded by this run" in card
+    assert "Trainable parameters: **0**" not in card
 
 
 def test_a_missing_report_is_refused(tmp_path) -> None:
