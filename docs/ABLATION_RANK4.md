@@ -64,3 +64,54 @@ this arm and must not be used.
   believing it; less capacity should not help.
 
 `resume_eligible` stays false. This arm changes nothing about the explanation gate.
+
+---
+
+# Rank-4 ablation — result
+
+Run August 18, 2026 on a Colab Tesla T4. `loraforge compare-runs --strict` confirms
+the comparison is controlled: identical library stack, same GPU model, and the only
+config differences are the two under test plus the removed test budget.
+
+| | rank 16 | rank 4 |
+|---|---:|---:|
+| validation macro-F1 (epoch 2) | 0.9310 | **0.9360** |
+| validation macro-F1 (epoch 1) | 0.9248 | 0.9182 |
+| trainable parameters | 41,943,040 (0.578%) | **10,485,760 (0.1445%)** |
+| adapter bytes | 167,838,575 | **42,008,469** |
+| peak CUDA | 5.77 GiB | 5.48 GiB |
+| wall time | 13,083.9 s | 14,487.9 s |
+
+## The difference is not distinguishable from noise
+
+Paired bootstrap over the 2,000 validation rows, 2,000 resamples, seed 73:
+
+- difference (rank 4 − rank 16): **+0.0050**
+- 95% confidence interval: **[−0.0023, +0.0122]** — spans zero
+- rank 4 failed to beat rank 16 in 199 of 2,000 resamples
+- McNemar on the paired predictions: **p = 0.220** over 54 discordant pairs
+
+The two adapters disagree on **56 of 2,000 rows**: rank 4 is right on 32 of them,
+rank 16 on 22. They have learned very nearly the same function.
+
+**So the finding is equivalence, not superiority.** Reporting "rank 4 beat rank 16"
+would be claiming a ten-row difference on a 2,000-row split as a result.
+
+## What this means
+
+The prediction recorded before the run held: this adaptation is low-dimensional
+enough that four directions carry it. **Rank 16 was over-provisioned by four times** —
+the same task quality for a quarter of the trainable parameters and a quarter of the
+adapter on disk.
+
+Two things this ablation does *not* show:
+
+- **Rank 4 is not faster to train.** It took 11% longer on the same GPU model. The
+  frozen 7B base dominates step time, so trainable-parameter count barely moves the
+  clock; that gap is shared-infrastructure variance, not a property of rank.
+- **This does not generalize to other tasks.** AG News adaptation is behavioural —
+  a labelling convention and an output format on top of comprehension the base model
+  already had. A task requiring knowledge the base model lacks should need more
+  directions, and this result says nothing about where that boundary sits.
+
+`resume_eligible` remains false.
