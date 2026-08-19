@@ -132,6 +132,59 @@ def check_baseline_agreement(recomputed: dict[str, Any], phase_one_path: Path) -
     }
 
 
+# TrainingArguments has been reshaped across transformers majors. Building the
+# kwargs explicitly, then checking them against the installed signature, keeps a
+# missing knob from either vanishing silently or surfacing as a bare TypeError
+# after the base model has already been downloaded and loaded.
+COSMETIC_ARGUMENTS = frozenset({"logging_steps", "report_to", "save_strategy", "remove_unused_columns"})
+
+
+def training_argument_kwargs(
+    config: ExperimentConfig,
+    supported: set[str],
+    *,
+    output_dir: str,
+    total_optimizer_steps: int,
+) -> dict[str, Any]:
+    """Map the frozen protocol onto whatever TrainingArguments accepts here."""
+    requested: dict[str, Any] = {
+        "output_dir": output_dir,
+        "num_train_epochs": config.training.epochs,
+        "learning_rate": config.training.learning_rate,
+        "per_device_train_batch_size": config.training.per_device_train_batch_size,
+        "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
+        "gradient_checkpointing": config.training.gradient_checkpointing,
+        "optim": config.training.optimizer,
+        "fp16": config.quantization.compute_dtype == "float16",
+        "seed": config.data.seed,
+        "logging_steps": 10,
+        "save_strategy": "no",
+        "report_to": [],
+        "remove_unused_columns": False,
+    }
+
+    # Warmup is part of the protocol, so express it however this version allows.
+    if "warmup_ratio" in supported:
+        requested["warmup_ratio"] = config.training.warmup_ratio
+    elif "warmup_steps" in supported:
+        requested["warmup_steps"] = max(1, round(config.training.warmup_ratio * total_optimizer_steps))
+    else:
+        raise EvidenceError(
+            "TrainingArguments accepts neither warmup_ratio nor warmup_steps; the frozen "
+            f"{config.training.warmup_ratio:.0%} warmup cannot be reproduced on this version"
+        )
+
+    dropped = sorted(set(requested) - supported)
+    essential = [name for name in dropped if name not in COSMETIC_ARGUMENTS]
+    if essential:
+        raise EvidenceError(
+            f"this transformers version does not accept {essential}, which the frozen "
+            "protocol depends on; pin the versions recorded in the training report "
+            "rather than training with different semantics"
+        )
+    return {name: value for name, value in requested.items() if name in supported}
+
+
 def train_qlora(
     model,
     tokenizer,
@@ -165,22 +218,20 @@ def train_qlora(
     )
 
     recorder = _EpochRecorder(model, tokenizer, bundle, config, root)
-    arguments = TrainingArguments(
-        output_dir=str(root / "outputs" / "trainer"),
-        num_train_epochs=config.training.epochs,
-        learning_rate=config.training.learning_rate,
-        per_device_train_batch_size=config.training.per_device_train_batch_size,
-        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
-        warmup_ratio=config.training.warmup_ratio,
-        gradient_checkpointing=config.training.gradient_checkpointing,
-        optim=config.training.optimizer,
-        fp16=config.quantization.compute_dtype == "float16",
-        logging_steps=10,
-        save_strategy="no",
-        report_to=[],
-        seed=config.data.seed,
-        remove_unused_columns=False,
+    import inspect
+    import math
+
+    effective_batch = (
+        config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
     )
+    total_optimizer_steps = math.ceil(len(features) / effective_batch) * config.training.epochs
+    argument_kwargs = training_argument_kwargs(
+        config,
+        set(inspect.signature(TrainingArguments.__init__).parameters),
+        output_dir=str(root / "outputs" / "trainer"),
+        total_optimizer_steps=total_optimizer_steps,
+    )
+    arguments = TrainingArguments(**argument_kwargs)
     trainer = Trainer(
         model=model,
         args=arguments,
@@ -211,6 +262,7 @@ def train_qlora(
         "model_revision": config.model_revision,
         "config": config.to_dict(),
         "environment": environment(),
+        "training_arguments": argument_kwargs,
         "parameters": parameters,
         "test_evaluated": False,
         "train_rows": len(bundle.train),
