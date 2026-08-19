@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .config import default_config
+from .config import default_config, load_config
 from .data import describe, load_dataset, write_stats
 from .prompts import training_messages
 
@@ -17,13 +17,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("write-config", help="write the frozen experiment config")
     stats = commands.add_parser("data-stats", help="load real data without test and write stats")
     stats.add_argument("--output", type=Path, default=Path("docs/evidence/data-stats.json"))
+    stats.add_argument("--config", type=Path, help="validated experiment JSON")
     examples = commands.add_parser("examples", help="write three deterministic formatted examples")
     examples.add_argument(
         "--output", type=Path, default=Path("docs/evidence/formatted-examples.json")
     )
+    examples.add_argument("--config", type=Path, help="validated experiment JSON")
 
-    train = commands.add_parser("train", help="run the two frozen QLoRA epochs (needs a GPU)")
+    train = commands.add_parser("train", help="run configured QLoRA training (needs a GPU)")
     train.add_argument("--root", type=Path, default=Path("."))
+    train.add_argument("--config", type=Path, help="validated experiment JSON")
 
     freeze = commands.add_parser(
         "freeze-selection", help="verify training evidence and freeze the adapter plus temperatures"
@@ -34,10 +37,45 @@ def build_parser() -> argparse.ArgumentParser:
         "final-test", help="the single publisher-test evaluation (needs a GPU and confirmation)"
     )
     final.add_argument("--root", type=Path, default=Path("."))
+    final.add_argument("--config", type=Path, help="validated experiment JSON")
     final.add_argument(
         "--confirm",
         default="",
         help="must be exactly 'i-am-running-the-single-final-test'",
+    )
+
+    intervals = commands.add_parser(
+        "intervals",
+        help="bootstrap confidence intervals and paired analysis from the stored test run",
+    )
+    intervals.add_argument("--root", type=Path, default=Path("."))
+    intervals.add_argument("--resamples", type=int, default=2_000)
+    intervals.add_argument("--seed", type=int, default=73)
+
+    compare = commands.add_parser(
+        "compare-runs",
+        help="diff two training runs and refuse to call the comparison controlled if it is not",
+    )
+    compare.add_argument("baseline", type=Path, help="baseline training-report.json")
+    compare.add_argument("variant", type=Path, help="variant training-report.json")
+    compare.add_argument(
+        "--expect-change",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="dotted config field the ablation intends to change, e.g. lora.rank",
+    )
+    compare.add_argument(
+        "--strict", action="store_true", help="exit non-zero unless the comparison is controlled"
+    )
+
+    card = commands.add_parser(
+        "model-card",
+        help="generate a Hugging Face model card for a run's selected adapter",
+    )
+    card.add_argument("--root", type=Path, default=Path("."))
+    card.add_argument(
+        "--repo-url", default="https://github.com/mghadia1/loraforge-llm", help="source repository"
     )
 
     verify = commands.add_parser(
@@ -54,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    config = default_config()
+    config_path = getattr(args, "config", None)
+    config = load_config(config_path) if config_path else default_config()
 
     if args.command == "write-config":
         output = Path("configs/experiment.json")
@@ -100,8 +139,42 @@ def main() -> int:
         }))
         return 0
 
+    if args.command == "intervals":
+        from .intervals import build_intervals
+
+        result = build_intervals(root=args.root, resamples=args.resamples, seed=args.seed)
+        delta = result["bootstrap"]["delta"]
+        print(json.dumps({
+            "delta": delta["delta"],
+            "ci": [delta["ci_lower"], delta["ci_upper"]],
+            "resamples_without_improvement": result["bootstrap"]["resamples_without_improvement"],
+            "fixed": result["paired"]["tuned_fixed_base_error"],
+            "broke": result["paired"]["tuned_broke_base_success"],
+            "new_test_evaluations": result["new_test_evaluations"],
+        }, indent=2))
+        return 0
+
+    if args.command == "compare-runs":
+        from .compare import compare_report_files, require_controlled
+
+        comparison = compare_report_files(
+            args.baseline, args.variant, expected_config_changes=set(args.expect_change)
+        )
+        print(json.dumps(comparison, indent=2))
+        if args.strict:
+            require_controlled(comparison)
+        return 0
+
+    if args.command == "model-card":
+        from .model_card import write_model_card
+
+        target = write_model_card(root=args.root, repo_url=args.repo_url)
+        print(json.dumps({"written": str(target), "bytes": target.stat().st_size}))
+        return 0
+
     if args.command == "verify":
         from .final_test import verify_final_report
+        from .intervals import INTERVALS_REPORT, verify_intervals
         from .provenance import read_json
         from .selection import TRAINING_REPORT, verify_training_report
 
@@ -119,6 +192,8 @@ def main() -> int:
             }
         if (Path(args.root) / "outputs/final-test-report.json").exists():
             checked["final_test_report"] = verify_final_report(root=args.root)
+        if (Path(args.root) / INTERVALS_REPORT).exists():
+            checked["test_intervals"] = verify_intervals(root=args.root)
         if not checked:
             raise SystemExit("nothing to verify: no training or final-test report exists yet")
         print(json.dumps(checked, indent=2))

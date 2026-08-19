@@ -73,6 +73,33 @@ recomputes every stored metric and logit hash, and explicitly reports
 `adapter_files_verified: false`. Strict verification remains the default and
 also checks both checkpoint directories plus the selected adapter.
 
+## Expanded-data follow-up (validation only)
+
+[`configs/experiment-expanded-data.json`](configs/experiment-expanded-data.json)
+defines a separate follow-up that trains on 16,000 unique publisher-train rows
+while preserving the completed experiment's exact 2,000 validation rows. It
+uses one epoch, so its 1,000 optimizer steps match the original run's two
+epochs over 8,000 rows. This isolates broader data coverage from additional
+training compute.
+
+The follow-up sets `test_evaluations_allowed` to `0`; `loraforge final-test`
+refuses that config. It has no result yet and must not change or replace the
+verified experiment above. Prepare it in a separate ignored run directory:
+
+```bash
+mkdir -p runs/expanded-data/outputs
+cp outputs/base-validation.json runs/expanded-data/outputs/
+loraforge data-stats --config configs/experiment-expanded-data.json \
+  --output docs/evidence/expanded-data-stats.json
+loraforge train --config configs/experiment-expanded-data.json \
+  --root runs/expanded-data
+loraforge freeze-selection --root runs/expanded-data
+```
+
+The existing base-validation artifact is reusable because the validation row
+IDs are deliberately unchanged. Training still requires a suitable CUDA GPU;
+this repository does not claim the follow-up has run.
+
 ## Selected adapter
 
 The 167,838,575-byte selected adapter is distributed as ordered release parts

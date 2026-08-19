@@ -27,6 +27,14 @@ request the publisher test split. A caller must explicitly set `allow_test=True`
 which makes a separate `split="test"` request after checkpoint and temperature
 selection are frozen.
 
+The validation window can also be pinned independently of the training count.
+The validation-only expanded-data preset keeps the original 500 rows per class
+at offsets 2,000–2,499, excludes them from training, and grows training to
+4,000 rows per class using the next deterministic candidates. One epoch over
+16,000 rows has the same 1,000 optimizer-step budget as two epochs over the
+original 8,000 rows. Its config disables publisher-test evaluation, so any
+comparison must remain on the unchanged validation split.
+
 ## Prompt loss
 
 The supervised sequence contains the system instruction, article, assistant
@@ -84,10 +92,18 @@ wall time, peak CUDA memory, package versions, and adapter hashes land in
 
 Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
-logits, logits are checked against their SHA-256, adapters are checked against
-their directory hash, and the selected epoch is re-derived from the rule rather
-than trusted. Editing a macro-F1 by hand in a report makes verification fail —
-which is the point. The GPU-free tests include exactly those tamper cases.
+logits down to per-class precision/recall/F1 and every calibration bin, logits
+are checked against their SHA-256, adapters are checked against their directory
+hash, and the selected epoch is re-derived from the rule rather than trusted.
+The verifier also re-fits both temperatures from the hash-checked validation
+logits, checks the frozen calibration metrics, and proves that the final report
+used those validation-fitted values. It also requires the final report's model
+revision, selected epoch, complete adapter manifest, and experiment config to
+match the validated training and frozen-selection evidence. The publisher-test
+row count is always checked; when the verifier loads the pinned dataset, it also
+checks the ordered row-ID digest. Editing any stored metric, provenance field,
+or calibration temperature by hand makes verification fail — which is the
+point. The GPU-free tests include exactly those tamper cases.
 
 ## The one test evaluation
 
