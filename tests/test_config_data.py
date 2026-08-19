@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import loraforge.data as data_module
 from loraforge.config import DataConfig, ExperimentConfig, default_config, load_config
 from loraforge.data import (
     CLASS_NAMES,
@@ -11,6 +12,7 @@ from loraforge.data import (
     LockedTestSplitError,
     Split,
     deterministic_development_split,
+    load_dataset,
 )
 
 
@@ -68,6 +70,65 @@ def test_default_development_budget_is_exactly_ten_thousand() -> None:
     assert len(CLASS_NAMES) * config.train_per_class == 8_000
     assert len(CLASS_NAMES) * config.validation_per_class == 2_000
 
+
+class FakePublisherSplit:
+    def __init__(self, rows: int) -> None:
+        self.rows = rows
+        self.features = {"label": type("LabelFeature", (), {"names": CLASS_NAMES})()}
+
+    def __len__(self) -> int:
+        return self.rows
+
+    def __iter__(self):
+        return (
+            {"text": f"publisher row {index}", "label": index % len(CLASS_NAMES)}
+            for index in range(self.rows)
+        )
+
+
+def test_default_loader_never_requests_the_publisher_test_split(monkeypatch) -> None:
+    requested = []
+
+    def fake_load_dataset(name, *, revision, split):
+        requested.append((name, revision, split))
+        assert split == "train"
+        return FakePublisherSplit(120_000)
+
+    empty = Split("empty", ())
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+    monkeypatch.setattr(
+        data_module,
+        "deterministic_development_split",
+        lambda rows, config: (empty, empty),
+    )
+
+    bundle = load_dataset(allow_test=False)
+
+    assert bundle.test is None
+    assert [split for _, _, split in requested] == ["train"]
+
+
+def test_authorized_loader_requests_test_only_after_train(monkeypatch) -> None:
+    requested = []
+
+    def fake_load_dataset(name, *, revision, split):
+        requested.append(split)
+        rows = 120_000 if split == "train" else 7_600
+        return FakePublisherSplit(rows)
+
+    empty = Split("empty", ())
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+    monkeypatch.setattr(
+        data_module,
+        "deterministic_development_split",
+        lambda rows, config: (empty, empty),
+    )
+
+    bundle = load_dataset(allow_test=True)
+
+    assert requested == ["train", "test"]
+    assert bundle.require_test().name == "test"
+    assert len(bundle.require_test()) == 7_600
 
 def test_expanded_training_keeps_validation_fixed_and_adds_rows() -> None:
     rows = synthetic_rows(per_class=8)
