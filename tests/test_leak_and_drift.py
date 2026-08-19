@@ -52,6 +52,32 @@ def test_test_contamination_is_refused_in_both_directions() -> None:
         )
 
 
+def test_cross_publisher_split_duplicate_is_found_despite_distinct_row_ids() -> None:
+    trained = Split(
+        "train",
+        (Example(row_id="train-namespaced", text="same article", label=0, source_index=1),),
+    )
+    judged = Split(
+        "test",
+        (Example(row_id="test-namespaced", text="same article", label=0, source_index=99),),
+    )
+    with pytest.raises(SplitLeakError):
+        assert_disjoint(trained, judged)
+
+
+def test_whitespace_variants_that_render_identically_are_a_leak() -> None:
+    trained = Split(
+        "train",
+        (Example(row_id="a", text="same\n article", label=0, source_index=1),),
+    )
+    judged = Split(
+        "test",
+        (Example(row_id="b", text=" same   article ", label=2, source_index=2),),
+    )
+    with pytest.raises(SplitLeakError):
+        assert_disjoint(trained, judged)
+
+
 def test_the_guard_is_not_a_bare_assertion() -> None:
     """`python -O` strips assert statements; a real exception type survives it."""
     assert issubclass(SplitLeakError, ValueError)
@@ -64,7 +90,9 @@ def report(packages: dict, rank: int, macro_f1: float, gpu: str = "Tesla T4") ->
     return {
         "environment": {"packages": packages, "gpu_name": gpu},
         "config": {"lora": {"rank": rank, "alpha": rank * 2}, "training": {"epochs": 2}},
-        "epochs": [{"validation": {"macro_f1": macro_f1}}],
+        "epochs": [{"epoch": 1, "validation": {"macro_f1": macro_f1}}],
+        "selection": {"selected_epoch": 1},
+        "validation_label_sha256": "same-validation-labels",
         "parameters": {"trainable_parameters": rank * 2_621_440},
         "wall_time_seconds": 13_000,
     }
@@ -82,6 +110,12 @@ def test_a_clean_rank_ablation_is_controlled() -> None:
     assert comparison["controlled"] is True
     assert comparison["validation_macro_f1"]["delta"] == pytest.approx(-0.0015)
     require_controlled(comparison)
+
+
+def test_missing_field_cannot_collide_with_its_display_marker() -> None:
+    from loraforge.compare import MISSING, differences
+
+    assert differences({"field": MISSING}, {}) == {"field": (MISSING, MISSING)}
 
 
 def test_a_changed_library_version_blocks_the_comparison() -> None:
@@ -106,6 +140,59 @@ def test_a_different_host_torch_is_reported_but_not_blocking() -> None:
     )
     assert comparison["controlled"] is True
     assert "torch" in comparison["package_differences"]
+
+
+def test_a_different_gpu_blocks_the_controlled_comparison() -> None:
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310, gpu="Tesla T4"),
+        report(STACK, 4, 0.9295, gpu="A100"),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+    assert comparison["controlled"] is False
+    with pytest.raises(EvidenceError, match="GPU model changed"):
+        require_controlled(comparison)
+
+
+def test_different_validation_rows_block_the_controlled_comparison() -> None:
+    variant = report(STACK, 4, 0.9295)
+    variant["validation_label_sha256"] = "different-validation-labels"
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        variant,
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+    assert comparison["controlled"] is False
+    with pytest.raises(EvidenceError, match="validation label digest"):
+        require_controlled(comparison)
+
+
+def test_reported_metric_comes_from_the_rule_selected_epoch() -> None:
+    baseline = report(STACK, 16, 0.90)
+    baseline["epochs"] = [
+        {"epoch": 1, "validation": {"macro_f1": 0.90}},
+        {"epoch": 2, "validation": {"macro_f1": 0.95}},
+    ]
+    baseline["selection"]["selected_epoch"] = 2
+    variant = report(STACK, 4, 0.91)
+    comparison = compare_runs(
+        baseline, variant, expected_config_changes={"lora.rank", "lora.alpha"}
+    )
+    assert comparison["validation_macro_f1"]["baseline"] == 0.95
+
+
+def test_selection_that_bypasses_the_tie_rule_is_refused() -> None:
+    baseline = report(STACK, 16, 0.90)
+    baseline["epochs"] = [
+        {"epoch": 1, "validation": {"macro_f1": 0.90}},
+        {"epoch": 2, "validation": {"macro_f1": 0.90}},
+    ]
+    baseline["selection"]["selected_epoch"] = 2
+    with pytest.raises(EvidenceError, match="selection rule"):
+        compare_runs(
+            baseline,
+            report(STACK, 4, 0.91),
+            expected_config_changes={"lora.rank", "lora.alpha"},
+        )
 
 
 def test_an_unexpected_config_change_blocks_the_comparison() -> None:

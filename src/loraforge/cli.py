@@ -49,8 +49,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="bootstrap confidence intervals and paired analysis from the stored test run",
     )
     intervals.add_argument("--root", type=Path, default=Path("."))
-    intervals.add_argument("--resamples", type=int, default=2_000)
-    intervals.add_argument("--seed", type=int, default=73)
 
     compare = commands.add_parser(
         "compare-runs",
@@ -142,7 +140,7 @@ def main() -> int:
     if args.command == "intervals":
         from .intervals import build_intervals
 
-        result = build_intervals(root=args.root, resamples=args.resamples, seed=args.seed)
+        result = build_intervals(root=args.root)
         delta = result["bootstrap"]["delta"]
         print(json.dumps({
             "delta": delta["delta"],

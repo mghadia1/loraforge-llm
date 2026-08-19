@@ -8,23 +8,73 @@ not, and a run that never touched the test split cannot quote test results.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
-from .provenance import EvidenceError, read_json, sha256_directory
+from .provenance import EvidenceError, read_json
 
 
 PLACEHOLDER = "[More Information Needed]"
 
 
-def _percent(report: dict[str, Any]) -> str:
+def _format_parameters(report: dict[str, Any]) -> str:
     parameters = report.get("parameters")
-    if not parameters:
-        return f"{0:,}"
+    if not isinstance(parameters, dict):
+        raise EvidenceError(
+            "training report has no audited parameters block; refusing to invent a count"
+        )
+    required = {"trainable_parameters", "trainable_percent", "total_parameters"}
+    if not required <= parameters.keys():
+        raise EvidenceError(
+            "training report parameters block is incomplete; refusing to render a model card"
+        )
+    trainable = parameters["trainable_parameters"]
+    total = parameters["total_parameters"]
+    percent = parameters["trainable_percent"]
+    if (
+        type(trainable) is not int
+        or type(total) is not int
+        or trainable <= 0
+        or total < trainable
+        or not isinstance(percent, (int, float))
+        or not math.isfinite(float(percent))
+        or float(percent) <= 0
+        or not math.isclose(float(percent), 100 * trainable / total, rel_tol=1e-6)
+    ):
+        raise EvidenceError("training report parameters block is not internally consistent")
     return (
-        f"{parameters['trainable_parameters']:,} "
-        f"({parameters['trainable_percent']:.4f}% of {parameters['total_parameters']:,})"
+        f"{trainable:,} "
+        f"({float(percent):.4f}% of {total:,})"
     )
+
+
+def _final_report_for_run(root: Path, report: dict[str, Any]) -> dict[str, Any] | None:
+    """Return only a held-out report that is statically bound to this training run."""
+    final_path = root / "outputs/final-test-report.json"
+    if not final_path.exists():
+        return None
+    final = read_json(final_path)
+    expected = {
+        "test_evaluated": True,
+        "test_evaluations_run": 1,
+        "model": report["model"],
+        "model_revision": report["model_revision"],
+        "selected_epoch": report["selection"]["selected_epoch"],
+        "selected_adapter_hashes": report["selection"]["selected_adapter_hashes"],
+        "config": report["config"],
+    }
+    for field, value in expected.items():
+        if final.get(field) != value:
+            raise EvidenceError(
+                f"final report {field} does not belong to this training run; "
+                "refusing to quote its test result"
+            )
+    if set(final.get("systems", {})) != {"base", "tuned"}:
+        raise EvidenceError("final report must contain exactly the base and tuned systems")
+    if type(final.get("rows")) is not int or final["rows"] <= 0:
+        raise EvidenceError("final report row count must be a positive integer")
+    return final
 
 
 def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> str:
@@ -36,16 +86,23 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     environment = report["environment"]
 
     selected_epoch = report["selection"]["selected_epoch"]
-    selected = next(e for e in report["epochs"] if e["epoch"] == selected_epoch)
+    from .training import select_checkpoint
+
+    selected = select_checkpoint(report["epochs"])
+    if selected["epoch"] != selected_epoch:
+        raise EvidenceError("training report selected epoch does not follow its selection rule")
     validation = selected["validation"]
     base_validation = report["base_validation_metrics"]
 
-    adapter_dir = root / report["selection"]["selected_adapter_dir"]
-    adapter_bytes = sha256_directory(adapter_dir)["total_bytes"] if adapter_dir.is_dir() else None
+    selected_hashes = report["selection"].get("selected_adapter_hashes")
+    if not isinstance(selected_hashes, dict) or type(selected_hashes.get("total_bytes")) is not int:
+        raise EvidenceError("training report has no recorded selected-adapter size")
+    adapter_bytes = selected_hashes["total_bytes"]
+    if adapter_bytes <= 0:
+        raise EvidenceError("recorded selected-adapter size must be positive")
 
     # Only a run that actually evaluated the held-out split may quote it.
-    final_path = root / "outputs/final-test-report.json"
-    final = read_json(final_path) if final_path.exists() else None
+    final = _final_report_for_run(root, report)
 
     lines: list[str] = []
     add = lines.append
@@ -118,7 +175,7 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
         f"- LoRA: rank {lora['rank']}, alpha {lora['alpha']}, dropout {lora['dropout']}, "
         f"targeting {', '.join(f'`{m}`' for m in lora['target_modules'])}"
     )
-    add(f"- Trainable parameters: **{_percent(report)}**")
+    add(f"- Trainable parameters: **{_format_parameters(report)}**")
     add(
         f"- Optimization: {training['epochs']} epochs, learning rate "
         f"{training['learning_rate']}, effective batch "
@@ -134,8 +191,7 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
         f"{report['wall_time_seconds'] / 3600:.2f} h, peak "
         f"{report['peak_cuda_memory_gib']:.2f} GiB CUDA"
     )
-    if adapter_bytes:
-        add(f"- Adapter size: {adapter_bytes:,} bytes")
+    add(f"- Adapter size: {adapter_bytes:,} bytes")
     add("")
 
     add("## How the class is read\n")

@@ -206,6 +206,19 @@ def test_modified_adapter_file_is_rejected(tmp_path) -> None:
         )
 
 
+def test_selected_adapter_model_card_is_mutable_but_payload_is_not(tmp_path) -> None:
+    make_training_run(tmp_path)
+    report = read_json(tmp_path / "outputs" / "training-report.json")
+    selected = tmp_path / "adapters" / "selected"
+    (selected / "README.md").write_text("a better model card", encoding="utf-8")
+
+    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+    (selected / "unexpected.bin").write_bytes(b"not recorded")
+    with pytest.raises(EvidenceError, match="selected epoch checkpoint"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
 def test_reports_only_verification_does_not_require_adapter_directories(tmp_path) -> None:
     make_training_run(tmp_path)
     for directory in ("epoch-1", "epoch-2", "selected"):

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from loraforge.config import default_config
 from loraforge.model_card import PLACEHOLDER, build_model_card, write_model_card
-from loraforge.provenance import write_json
+from loraforge.provenance import (
+    EvidenceError,
+    sha256_directory,
+    verify_directory_snapshot,
+    write_json,
+)
 
 
 def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
@@ -13,7 +20,9 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
     config["lora"]["alpha"] = rank * 2
     adapter = tmp_path / "adapters" / "selected"
     adapter.mkdir(parents=True, exist_ok=True)
+    (adapter / "adapter_config.json").write_text('{"r": 4}')
     (adapter / "adapter_model.safetensors").write_text("weights")
+    adapter_hashes = sha256_directory(adapter)
 
     write_json(
         {
@@ -25,14 +34,24 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
             "validation_rows": 2_000,
             "base_validation_metrics": {"accuracy": 0.7475, "macro_f1": 0.7299},
             "epochs": [
-                {"epoch": 1, "validation": {"accuracy": 0.9182, "macro_f1": 0.9182}},
+                {
+                    "epoch": 1,
+                    "validation": {
+                        "accuracy": macro_f1 - 0.02,
+                        "macro_f1": macro_f1 - 0.02,
+                    },
+                },
                 {"epoch": 2, "validation": {"accuracy": macro_f1, "macro_f1": macro_f1}},
             ],
-            "selection": {"selected_epoch": 2, "selected_adapter_dir": "adapters/selected"},
+            "selection": {
+                "selected_epoch": 2,
+                "selected_adapter_dir": "adapters/selected",
+                "selected_adapter_hashes": adapter_hashes,
+            },
             "parameters": {
                 "trainable_parameters": 10_485_760,
                 "total_parameters": 7_258_509_312,
-                "trainable_percent": 0.1445,
+                "trainable_percent": 100 * 10_485_760 / 7_258_509_312,
             },
             "wall_time_seconds": 14_487.9,
             "peak_cuda_memory_gib": 5.48,
@@ -42,7 +61,14 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
     if with_test:
         write_json(
             {
+                "test_evaluated": True,
+                "test_evaluations_run": 1,
                 "rows": 7_600,
+                "model": config["model_name"],
+                "model_revision": config["model_revision"],
+                "selected_epoch": 2,
+                "selected_adapter_hashes": adapter_hashes,
+                "config": config,
                 "systems": {
                     "base": {"metrics_before_temperature": {"accuracy": 0.7428, "macro_f1": 0.7262}},
                     "tuned": {"metrics_before_temperature": {"accuracy": 0.9333, "macro_f1": 0.9333}},
@@ -96,8 +122,44 @@ def test_writing_the_card_lands_next_to_the_adapter(tmp_path) -> None:
     assert "https://example.invalid/repo" in target.read_text()
 
 
-def test_a_missing_report_is_refused(tmp_path) -> None:
-    from loraforge.provenance import EvidenceError
+def test_writing_model_card_does_not_break_the_adapter_payload_chain(tmp_path) -> None:
+    make_run(tmp_path)
+    adapter = tmp_path / "adapters" / "selected"
+    recorded = sha256_directory(adapter)
 
+    write_model_card(root=tmp_path)
+
+    assert sha256_directory(adapter)["combined_sha256"] != recorded["combined_sha256"]
+    verify_directory_snapshot(
+        adapter, recorded, mutable_files=frozenset({"README.md"})
+    )
+    (adapter / "adapter_model.safetensors").write_text("tampered")
+    with pytest.raises(EvidenceError, match="adapter payload file"):
+        verify_directory_snapshot(
+            adapter, recorded, mutable_files=frozenset({"README.md"})
+        )
+
+
+def test_missing_parameter_measurement_is_refused(tmp_path) -> None:
+    make_run(tmp_path)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(path.read_text())
+    del report["parameters"]
+    write_json(report, path)
+    with pytest.raises(EvidenceError, match="refusing to invent"):
+        build_model_card(root=tmp_path)
+
+
+def test_unrelated_final_report_is_refused(tmp_path) -> None:
+    make_run(tmp_path, with_test=True)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = json.loads(path.read_text())
+    report["selected_epoch"] = 1
+    write_json(report, path)
+    with pytest.raises(EvidenceError, match="does not belong"):
+        build_model_card(root=tmp_path)
+
+
+def test_a_missing_report_is_refused(tmp_path) -> None:
     with pytest.raises(EvidenceError, match="training-report.json"):
         build_model_card(root=tmp_path)

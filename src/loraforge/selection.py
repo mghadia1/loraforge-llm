@@ -13,8 +13,8 @@ from .provenance import (
     EvidenceError,
     load_logits,
     read_json,
-    sha256_directory,
     utc_now,
+    verify_directory_snapshot,
     write_json,
 )
 
@@ -97,9 +97,13 @@ def verify_training_report(
         logits = load_logits(entry["validation_logits"], root=root)
         recompute_block(logits, labels, entry["validation"], f"epoch-{entry['epoch']}")
         if verify_adapters:
-            stored = sha256_directory(root / entry["adapter_dir"])["combined_sha256"]
-            if stored != entry["adapter_hashes"]["combined_sha256"]:
-                raise EvidenceError(f"epoch-{entry['epoch']} adapter files changed since training")
+            try:
+                verify_directory_snapshot(root / entry["adapter_dir"], entry["adapter_hashes"])
+            except EvidenceError as error:
+                raise EvidenceError(
+                    f"epoch-{entry['epoch']} adapter files changed since training"
+                ) from error
+
         records.append(entry)
 
     selected = select_checkpoint(records)
@@ -112,11 +116,16 @@ def verify_training_report(
         raise EvidenceError("selected adapter hashes do not match the selected epoch")
     if verify_adapters:
         selected_dir = root / report["selection"]["selected_adapter_dir"]
-        if (
-            sha256_directory(selected_dir)["combined_sha256"]
-            != selected["adapter_hashes"]["combined_sha256"]
-        ):
-            raise EvidenceError("adapters/selected does not match the selected epoch checkpoint")
+        try:
+            verify_directory_snapshot(
+                selected_dir,
+                selected["adapter_hashes"],
+                mutable_files=frozenset({"README.md"}),
+            )
+        except EvidenceError as error:
+            raise EvidenceError(
+                "adapters/selected does not match the selected epoch checkpoint"
+            ) from error
     return selected
 
 
@@ -262,11 +271,16 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
     adapter_dir = root / frozen["selected_adapter_dir"]
     if not adapter_dir.is_dir():
         raise EvidenceError(f"selected adapter {adapter_dir} is missing")
-    actual = sha256_directory(adapter_dir)["combined_sha256"]
-    if actual != frozen["selected_adapter_hashes"]["combined_sha256"]:
+    try:
+        verify_directory_snapshot(
+            adapter_dir,
+            frozen["selected_adapter_hashes"],
+            mutable_files=frozenset({"README.md"}),
+        )
+    except EvidenceError as error:
         raise EvidenceError(
             "the selected adapter changed after selection was frozen; test evaluation refused"
-        )
+        ) from error
     if frozen.get("test_evaluated"):
         raise EvidenceError("frozen selection is already marked as test-evaluated")
     return frozen

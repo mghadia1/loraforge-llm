@@ -71,6 +71,30 @@ def test_default_development_budget_is_exactly_ten_thousand() -> None:
     assert len(CLASS_NAMES) * config.validation_per_class == 2_000
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"text": None, "label": 0},
+        {"text": "", "label": 0},
+        {"text": "article", "label": True},
+        {"text": "article", "label": 1.5},
+        {"text": "article", "label": 4},
+        {"text": "article"},
+    ],
+)
+def test_upstream_rows_are_validated_before_conversion(row) -> None:
+    with pytest.raises(ValueError):
+        data_module._to_examples("train", [row])
+
+
+def test_upstream_row_ids_keep_raw_provenance_while_content_is_normalized() -> None:
+    first = data_module._to_examples("train", [{"text": "same\narticle", "label": 0}])[0]
+    second = data_module._to_examples("test", [{"text": "same article", "label": 0}])[0]
+    assert first.row_id != second.row_id
+    with pytest.raises(data_module.SplitLeakError):
+        data_module.assert_disjoint(Split("train", (first,)), Split("test", (second,)))
+
+
 class FakePublisherSplit:
     def __init__(self, rows: int) -> None:
         self.rows = rows

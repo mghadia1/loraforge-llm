@@ -61,6 +61,54 @@ def sha256_directory(path: Path) -> dict[str, Any]:
     }
 
 
+def verify_directory_snapshot(
+    path: Path,
+    recorded: dict[str, Any],
+    *,
+    mutable_files: frozenset[str] = frozenset(),
+) -> None:
+    """Verify every immutable file in a recorded directory snapshot.
+
+    PEFT writes ``README.md`` beside adapter weights.  That model card is
+    distribution metadata, not executable adapter payload, and may be improved
+    after training.  Callers can therefore mark it mutable while still requiring
+    the recorded config and weight files to exist, match their hashes, and be the
+    only immutable files present.
+    """
+    root = Path(path)
+    if not root.is_dir():
+        raise EvidenceError(f"{root} is not a directory")
+    recorded_files = recorded.get("files")
+    if not isinstance(recorded_files, dict) or not recorded_files:
+        raise EvidenceError("recorded directory snapshot has no file manifest")
+
+    actual_paths = {
+        str(item.relative_to(root)): item
+        for item in root.rglob("*")
+        if item.is_file()
+    }
+    expected_payload = set(recorded_files) - mutable_files
+    actual_payload = set(actual_paths) - mutable_files
+    if expected_payload != actual_payload:
+        raise EvidenceError(
+            "adapter payload files differ from the recorded snapshot: "
+            f"missing={sorted(expected_payload - actual_payload)}, "
+            f"unexpected={sorted(actual_payload - expected_payload)}"
+        )
+    for name in sorted(expected_payload):
+        actual = sha256_file(actual_paths[name])
+        if actual != recorded_files[name]:
+            raise EvidenceError(
+                f"adapter payload file {name} hash {actual} does not match "
+                f"the recorded {recorded_files[name]}"
+            )
+
+    if not mutable_files:
+        actual = sha256_directory(root)
+        if actual != recorded:
+            raise EvidenceError("directory snapshot does not match its recorded manifest")
+
+
 def sha256_array(array: np.ndarray) -> str:
     """Hash a numeric array so a report cannot be edited away from its own logits."""
     values = np.ascontiguousarray(np.asarray(array, dtype=np.float32))
