@@ -22,6 +22,16 @@ class LockedTestSplitError(PermissionError):
     """Raised when code touches the publisher test split before the final run."""
 
 
+class SplitLeakError(ValueError):
+    """Raised when a row used for training also appears in a split used to judge it.
+
+    Caught by hand once: growing the training set toward the publisher's full
+    120,000 rows would have swallowed the 2,000 validation rows, and every
+    selection decision made afterwards would have been scored on trained-on data.
+    A bare `assert` was not enough, since `python -O` removes it.
+    """
+
+
 @dataclass(frozen=True)
 class Example:
     row_id: str
@@ -99,24 +109,48 @@ def deterministic_development_split(
 
     train: list[Example] = []
     validation: list[Example] = []
+    validation_start = (
+        config.train_per_class
+        if config.validation_start_per_class is None
+        else config.validation_start_per_class
+    )
+    validation_stop = validation_start + config.validation_per_class
     required = config.train_per_class + config.validation_per_class
     for label, items in grouped.items():
-        if len(items) < required:
-            raise ValueError(f"class {label} has {len(items)} rows; {required} required")
+        minimum_rows = max(required, validation_stop)
+        if len(items) < minimum_rows:
+            raise ValueError(
+                f"class {label} has {len(items)} rows; {minimum_rows} required"
+            )
         ordered = sorted(
             items,
             key=lambda item: hashlib.sha256(
                 f"{config.seed}\0{item.row_id}".encode("utf-8")
             ).hexdigest(),
         )
-        train.extend(ordered[: config.train_per_class])
-        validation.extend(ordered[config.train_per_class : required])
+        held_out = ordered[validation_start:validation_stop]
+        training_candidates = ordered[:validation_start] + ordered[validation_stop:]
+        train.extend(training_candidates[: config.train_per_class])
+        validation.extend(held_out)
 
     train.sort(key=lambda item: item.row_id)
     validation.sort(key=lambda item: item.row_id)
-    if set(item.row_id for item in train) & set(item.row_id for item in validation):
-        raise AssertionError("development split overlap")
-    return Split("train", tuple(train)), Split("validation", tuple(validation))
+    train_split = Split("train", tuple(train))
+    validation_split = Split("validation", tuple(validation))
+    assert_disjoint(train_split, validation_split)
+    return train_split, validation_split
+
+
+def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
+    """Refuse any overlap between rows trained on and rows used to judge training."""
+    shared = {item.row_id for item in trained_on.examples} & {
+        item.row_id for item in judged_on.examples
+    }
+    if shared:
+        raise SplitLeakError(
+            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows also appear in "
+            f"{trained_on.name}; selection would be scored on trained-on data"
+        )
 
 
 def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) -> DatasetBundle:
@@ -133,24 +167,45 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
     test = None
     if allow_test:
         test = Split("test", tuple(_to_examples("test", raw["test"])))
-    return DatasetBundle(train=train, validation=validation, test=test)
+    bundle = DatasetBundle(train=train, validation=validation, test=test)
+    assert_no_leaks(bundle)
+    return bundle
+
+
+def assert_no_leaks(bundle: DatasetBundle) -> None:
+    """Check every split pair that could contaminate a decision, on every load."""
+    assert_disjoint(bundle.train, bundle.validation)
+    if bundle.test is not None:
+        assert_disjoint(bundle.train, bundle.test)
+        assert_disjoint(bundle.validation, bundle.test)
 
 
 def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
     splits = [bundle.train, bundle.validation]
     if bundle.test is not None:
         splits.append(bundle.test)
+    selection = {
+        "seed": config.seed,
+        "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
+        "unused_publisher_train_rows": 120_000 - len(bundle.train) - len(bundle.validation),
+    }
+    if config.validation_start_per_class is not None:
+        selection.update(
+            {
+                "algorithm": (
+                    "per-class SHA-256 ordering; fixed validation window; "
+                    "training excludes validation; row-ID sort"
+                ),
+                "validation_start_per_class": config.validation_start_per_class,
+            }
+        )
     return {
         "schema_version": 1,
         "dataset": config.dataset_name,
         "dataset_revision": config.dataset_revision,
         "publisher_train_rows": 120_000,
         "publisher_test_rows": config.publisher_test_rows,
-        "selection": {
-            "seed": config.seed,
-            "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
-            "unused_publisher_train_rows": 120_000 - len(bundle.train) - len(bundle.validation),
-        },
+        "selection": selection,
         "classes": list(CLASS_NAMES),
         "splits": {
             split.name: {

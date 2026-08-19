@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-08-07T07:43:47.761867Z",
+  "model": "mistralai/Mistral-7B-Instruct-v0.3",
+  "model_revision": "c170c708c41dac9275d15a8fff4eca08d52bab71",
+  "split": "validation",
+  "test_evaluated": false,
+  "metrics_before_temperature": {
+    "rows": 2000,
+    "accuracy": 0.7475,
+    "macro_f1": 0.7299361500436565,
+    "invalid_prediction_rate": 0.0,
+    "per_class": {
+      "World": {
+        "precision": 0.7368421052631579,
+        "recall": 0.868,
+        "f1": 0.7970615243342516,
+        "support": 500
+      },
+      "Sports": {
+        "precision": 0.896551724137931,
+        "recall": 0.884,
+        "f1": 0.8902316213494461,
+        "support": 500
+      },
+      "Business": {
+        "precision": 0.6159217877094972,
+        "recall": 0.882,
+        "f1": 0.725328947368421,
+        "support": 500
+      },
+      "Sci/Tech": {
+        "precision": 0.8811881188118812,
+        "recall": 0.356,
+        "f1": 0.5071225071225072,
+        "support": 500
+      }
+    },
+    "confusion_matrix": [
+      [
+        434,
+        24,
+        36,
+        6
+      ],
+      [
+        43,
+        442,
+        11,
+        4
+      ],
+      [
+        39,
+        6,
+        441,
+        14
+      ],
+      [
+        73,
+        21,
+        228,
+        178
+      ]
+    ],
+    "nll": 1.8788694432176736,
+    "calibration": {
+      "ece": 0.21823306528301473,
+      "bins": [
+        {
+          "lower": 0.0,
+          "upper": 0.06666666666666667,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.06666666666666667,
+          "upper": 0.13333333333333333,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.13333333333333333,
+          "upper": 0.2,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.2,
+          "upper": 0.26666666666666666,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.26666666666666666,
+          "upper": 0.3333333333333333,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.3333333333333333,
+          "upper": 0.4,
+          "count": 1,
+          "average_confidence": 0.3518577410174175,
+          "accuracy": 0.0,
+          "gap": 0.3518577410174175
+        },
+        {
+          "lower": 0.4,
+          "upper": 0.4666666666666667,
+          "count": 5,
+          "average_confidence": 0.4450899812870583,
+          "accuracy": 0.4,
+          "gap": 0.04508998128705827
+        },
+        {
+          "lower": 0.4666666666666667,
+          "upper": 0.5333333333333333,
+          "count": 13,
+          "average_confidence": 0.5070898557943455,
+          "accuracy": 0.38461538461538464,
+          "gap": 0.12247447117896088
+        },
+        {
+          "lower": 0.5333333333333333,
+          "upper": 0.6,
+          "count": 37,
+          "average_confidence": 0.566409255398595,
+          "accuracy": 0.6216216216216216,
+          "gap": -0.05521236622302661
+        },
+        {
+          "lower": 0.6,
+          "upper": 0.6666666666666666,
+          "count": 38,
+          "average_confidence": 0.6337539616041955,
+          "accuracy": 0.39473684210526316,
+          "gap": 0.23901711949893234
+        },
+        {
+          "lower": 0.6666666666666666,
+          "upper": 0.7333333333333333,
+          "count": 30,
+          "average_confidence": 0.7000582596511635,
+          "accuracy": 0.5333333333333333,
+          "gap": 0.1667249263178302
+        },
+        {
+          "lower": 0.7333333333333333,
+          "upper": 0.8,
+          "count": 28,
+          "average_confidence": 0.7629850627275806,
+          "accuracy": 0.42857142857142855,
+          "gap": 0.33441363415615205
+        },
+        {
+          "lower": 0.8,
+          "upper": 0.8666666666666667,
+          "count": 37,
+          "average_confidence": 0.8325188767984626,
+          "accuracy": 0.5675675675675675,
+          "gap": 0.26495130923089505
+        },
+        {
+          "lower": 0.8666666666666667,
+          "upper": 0.9333333333333333,
+          "count": 51,
+          "average_confidence": 0.9005707822064042,
+          "accuracy": 0.49019607843137253,
+          "gap": 0.41037470377503166
+        },
+        {
+          "lower": 0.9333333333333333,
+          "upper": 1.0,
+          "count": 1760,
+          "average_confidence": 0.9966326754670807,
+          "accuracy": 0.7818181818181819,
+          "gap": 0.21481449364889882
+        }
+      ],
+      "n_bins": 15
+    },
+    "temperature": 1.0
+  },
+  "validation_temperature": 4.521819770491914,
+  "metrics_after_temperature": {
+    "rows": 2000,
+    "accuracy": 0.7475,
+    "macro_f1": 0.7299361500436565,
+    "invalid_prediction_rate": 0.0,
+    "per_class": {
+      "World": {
+        "precision": 0.7368421052631579,
+        "recall": 0.868,
+        "f1": 0.7970615243342516,
+        "support": 500
+      },
+      "Sports": {
+        "precision": 0.896551724137931,
+        "recall": 0.884,
+        "f1": 0.8902316213494461,
+        "support": 500
+      },
+      "Business": {
+        "precision": 0.6159217877094972,
+        "recall": 0.882,
+        "f1": 0.725328947368421,
+        "support": 500
+      },
+      "Sci/Tech": {
+        "precision": 0.8811881188118812,
+        "recall": 0.356,
+        "f1": 0.5071225071225072,
+        "support": 500
+      }
+    },
+    "confusion_matrix": [
+      [
+        434,
+        24,
+        36,
+        6
+      ],
+      [
+        43,
+        442,
+        11,
+        4
+      ],
+      [
+        39,
+        6,
+        441,
+        14
+      ],
+      [
+        73,
+        21,
+        228,
+        178
+      ]
+    ],
+    "nll": 0.6967406310151751,
+    "calibration": {
+      "ece": 0.029775002551355904,
+      "bins": [
+        {
+          "lower": 0.0,
+          "upper": 0.06666666666666667,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.06666666666666667,
+          "upper": 0.13333333333333333,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.13333333333333333,
+          "upper": 0.2,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.2,
+          "upper": 0.26666666666666666,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        },
+        {
+          "lower": 0.26666666666666666,
+          "upper": 0.3333333333333333,
+          "count": 10,
+          "average_confidence": 0.3148912325679326,
+          "accuracy": 0.3,
+          "gap": 0.014891232567932622
+        },
+        {
+          "lower": 0.3333333333333333,
+          "upper": 0.4,
+          "count": 30,
+          "average_confidence": 0.36889227416009984,
+          "accuracy": 0.5,
+          "gap": -0.13110772583990016
+        },
+        {
+          "lower": 0.4,
+          "upper": 0.4666666666666667,
+          "count": 78,
+          "average_confidence": 0.43823502813060955,
+          "accuracy": 0.47435897435897434,
+          "gap": -0.03612394622836479
+        },
+        {
+          "lower": 0.4666666666666667,
+          "upper": 0.5333333333333333,
+          "count": 113,
+          "average_confidence": 0.49828161835323537,
+          "accuracy": 0.49557522123893805,
+          "gap": 0.002706397114297321
+        },
+        {
+          "lower": 0.5333333333333333,
+          "upper": 0.6,
+          "count": 119,
+          "average_confidence": 0.5667751520385733,
+          "accuracy": 0.48739495798319327,
+          "gap": 0.07938019405538005
+        },
+        {
+          "lower": 0.6,
+          "upper": 0.6666666666666666,
+          "count": 127,
+          "average_confidence": 0.6343568532619833,
+          "accuracy": 0.5354330708661418,
+          "gap": 0.09892378239584154
+        },
+        {
+          "lower": 0.6666666666666666,
+          "upper": 0.7333333333333333,
+          "count": 161,
+          "average_confidence": 0.7010158221464555,
+          "accuracy": 0.5962732919254659,
+          "gap": 0.10474253022098967
+        },
+        {
+          "lower": 0.7333333333333333,
+          "upper": 0.8,
+          "count": 237,
+          "average_confidence": 0.7700094274173027,
+          "accuracy": 0.7341772151898734,
+          "gap": 0.03583221222742927
+        },
+        {
+          "lower": 0.8,
+          "upper": 0.8666666666666667,
+          "count": 446,
+          "average_confidence": 0.8385431957978069,
+          "accuracy": 0.8475336322869955,
+          "gap": -0.008990436489188625
+        },
+        {
+          "lower": 0.8666666666666667,
+          "upper": 0.9333333333333333,
+          "count": 679,
+          "average_confidence": 0.8969524439947171,
+          "accuracy": 0.898379970544919,
+          "gap": -0.0014275265502019518
+        },
+        {
+          "lower": 0.9333333333333333,
+          "upper": 1.0,
+          "count": 0,
+          "average_confidence": null,
+          "accuracy": null,
+          "gap": null
+        }
+      ],
+      "n_bins": 15
+    },
+    "temperature": 4.521819770491914
+  },
+  "peak_cuda_memory_gib": 11.879239559173584,
+  "wall_time_seconds": 363.1528923579999,
+  "gpu_name": "Tesla T4"
+}

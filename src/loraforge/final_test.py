@@ -21,7 +21,13 @@ from .provenance import (
     utc_now,
     write_json,
 )
-from .selection import METRIC_TOLERANCE, recompute_block, require_frozen_selection
+from .selection import (
+    METRIC_TOLERANCE,
+    TRAINING_REPORT,
+    recompute_block,
+    require_frozen_selection,
+    verify_frozen_selection,
+)
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
 CONFIRMATION = "i-am-running-the-single-final-test"
@@ -59,6 +65,10 @@ def run_final_test(
     from .modeling import attach_saved_adapter, load_quantized_base, score_class_codes
 
     root = Path(root)
+    if config.test_evaluations_allowed != 1:
+        raise EvidenceError(
+            "this experiment is validation-only or invalid; publisher-test evaluation is disabled"
+        )
     if confirmation != CONFIRMATION:
         raise EvidenceError(
             f"the final test evaluation requires the explicit confirmation {CONFIRMATION!r}"
@@ -165,31 +175,78 @@ def run_final_test(
 
 
 def verify_final_report(
-    *, root: Path = Path("."), labels: list[int] | None = None
+    *,
+    root: Path = Path("."),
+    labels: list[int] | None = None,
+    validation_labels: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Recompute every headline test number from the stored logits and hashes."""
+    """Recompute test metrics and prove calibration came from validation."""
     root = Path(root)
     report = read_json(root / FINAL_REPORT)
     if report.get("test_evaluations_run") != 1:
         raise EvidenceError("the final report must record exactly one test evaluation")
+    training_report = read_json(root / TRAINING_REPORT)
     frozen = read_json(root / "outputs" / "frozen-selection.json")
-    if (
-        frozen["selected_adapter_hashes"]["combined_sha256"]
-        != report["selected_adapter_hashes"]["combined_sha256"]
-    ):
-        raise EvidenceError("final report adapter hash does not match the frozen selection")
+    fitted_temperatures = verify_frozen_selection(root=root, labels=validation_labels)
+
+    expected_provenance = {
+        "schema_version": 1,
+        "test_evaluated": True,
+        "split": "publisher test",
+        "model": frozen["model"],
+        "model_revision": frozen["model_revision"],
+        "selected_epoch": frozen["selected_epoch"],
+        "selected_adapter_hashes": frozen["selected_adapter_hashes"],
+        "config": training_report["config"],
+    }
+    for field, expected in expected_provenance.items():
+        if report.get(field) != expected:
+            raise EvidenceError(
+                f"final report {field} does not match the validated training and frozen evidence"
+            )
+    systems = report.get("systems")
+    if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
+        raise EvidenceError("final report must contain exactly the base and tuned systems")
 
     if labels is None:
         from .config import DataConfig
         from .data import load_dataset
 
-        bundle = load_dataset(allow_test=True, config=DataConfig(**report["config"]["data"]))
-        labels = bundle.require_test().labels
+        bundle = load_dataset(
+            allow_test=True,
+            config=DataConfig(**training_report["config"]["data"]),
+        )
+        test = bundle.require_test()
+        labels = test.labels
+        if test.id_sha256() != report.get("test_row_ids_sha256"):
+            raise EvidenceError("publisher-test row IDs do not match the final report")
+    if report.get("rows") != len(labels):
+        raise EvidenceError("final report row count does not match the publisher-test labels")
     if sha256_labels(labels) != report["test_label_sha256"]:
         raise EvidenceError("test labels no longer match the final report")
 
     checked = {}
-    for name, system in report["systems"].items():
+    for name, system in systems.items():
+        for field, recorded_temperature in (
+            ("validation_fitted_temperature", system["validation_fitted_temperature"]),
+            (
+                "metrics_after_temperature.temperature",
+                system["metrics_after_temperature"]["temperature"],
+            ),
+        ):
+            try:
+                difference = abs(
+                    float(recorded_temperature) - fitted_temperatures[name]
+                )
+            except (TypeError, ValueError) as error:
+                raise EvidenceError(f"{name}.{field} must be a finite number") from error
+            if (
+                not np.isfinite(float(recorded_temperature))
+                or difference > METRIC_TOLERANCE
+            ):
+                raise EvidenceError(
+                    f"{name}.{field} does not match the temperature fitted on validation"
+                )
         logits = load_logits(system["logits"], root=root)
         recompute_block(logits, labels, system["metrics_before_temperature"], f"{name}.before")
         recompute_block(logits, labels, system["metrics_after_temperature"], f"{name}.after")

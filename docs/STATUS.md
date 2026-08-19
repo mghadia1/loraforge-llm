@@ -53,9 +53,15 @@ and regression tests cover the original failure.
 
 `outputs/qlora-setup.json` remains unedited and reports 1.1037% trainable
 parameters. That percentage is not quoted as a result: packed 4-bit
-`Params4bit.numel()` undercounted the full denominator. The valid numerator is
-41,943,040 trainable LoRA weights; the corrected unpacked fraction is 0.5787%.
-The code and tests now reject the packed denominator.
+`Params4bit.numel()` undercounted the full denominator. The valid, measured
+quantity is the numerator — 41,943,040 trainable adapter parameters, roughly
+0.6% of a 7B model. The code and tests now reject the packed denominator.
+
+No completed run recorded an audited unpacked denominator, because
+`parameter_report` was not called during training. It is now invoked before the
+first optimizer step, so the next run stores the audited count in
+`outputs/training-report.json`. Until then, quote the numerator and an
+approximate fraction, not a precise percentage.
 
 ### Efficient final-position scoring
 

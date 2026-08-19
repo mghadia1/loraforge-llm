@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -24,23 +25,57 @@ FROZEN_SELECTION = Path("outputs/frozen-selection.json")
 
 
 def _assert_close(name: str, recorded: float, recomputed: float) -> None:
-    if abs(float(recorded) - float(recomputed)) > METRIC_TOLERANCE:
+    recorded_value = float(recorded)
+    recomputed_value = float(recomputed)
+    if (
+        not math.isfinite(recorded_value)
+        or not math.isfinite(recomputed_value)
+        or abs(recorded_value - recomputed_value) > METRIC_TOLERANCE
+    ):
         raise EvidenceError(
             f"{name} recorded as {recorded} but its own logits recompute to {recomputed}"
+        )
+
+
+def _assert_metric_tree(name: str, recorded: Any, recomputed: Any) -> None:
+    """Compare a complete metric tree, using tolerance only for finite floats."""
+    if isinstance(recomputed, dict):
+        if not isinstance(recorded, dict):
+            raise EvidenceError(f"{name} must be a metrics object")
+        missing = recomputed.keys() - recorded.keys()
+        unexpected = recorded.keys() - recomputed.keys()
+        if missing or unexpected:
+            raise EvidenceError(
+                f"{name} metric fields differ: missing={sorted(missing)}, "
+                f"unexpected={sorted(unexpected)}"
+            )
+        for key, value in recomputed.items():
+            _assert_metric_tree(f"{name}.{key}", recorded[key], value)
+        return
+    if isinstance(recomputed, list):
+        if not isinstance(recorded, list) or len(recorded) != len(recomputed):
+            raise EvidenceError(
+                f"{name} recorded length does not match its own logits"
+            )
+        for index, value in enumerate(recomputed):
+            _assert_metric_tree(f"{name}[{index}]", recorded[index], value)
+        return
+    if isinstance(recomputed, float):
+        try:
+            _assert_close(name, recorded, recomputed)
+        except (TypeError, ValueError) as error:
+            raise EvidenceError(f"{name} must be a finite number") from error
+        return
+    if recorded != recomputed:
+        raise EvidenceError(
+            f"{name} recorded as {recorded!r} but its own logits recompute to {recomputed!r}"
         )
 
 
 def recompute_block(logits: np.ndarray, labels: list[int], recorded: dict[str, Any], name: str) -> None:
     """Recompute a metrics block from raw logits and reject any hand-edited number."""
     fresh = evaluation_block(logits, labels, temperature=recorded.get("temperature", 1.0))
-    _assert_close(f"{name}.macro_f1", recorded["macro_f1"], fresh["macro_f1"])
-    _assert_close(f"{name}.accuracy", recorded["accuracy"], fresh["accuracy"])
-    _assert_close(f"{name}.nll", recorded["nll"], fresh["nll"])
-    _assert_close(
-        f"{name}.calibration.ece", recorded["calibration"]["ece"], fresh["calibration"]["ece"]
-    )
-    if recorded["confusion_matrix"] != fresh["confusion_matrix"]:
-        raise EvidenceError(f"{name}.confusion_matrix does not match its own logits")
+    _assert_metric_tree(name, recorded, fresh)
 
 
 def verify_training_report(
@@ -160,6 +195,64 @@ def build_frozen_selection(
     }
     write_json(frozen, target)
     return frozen
+
+
+def verify_frozen_selection(
+    *, root: Path = Path("."), labels: list[int] | None = None
+) -> dict[str, float]:
+    """Re-fit validation temperatures and verify the complete frozen calibration gate."""
+    root = Path(root)
+    report = read_json(root / TRAINING_REPORT)
+    labels = _validation_labels(report, root, labels)
+    selected = verify_training_report(
+        report, root=root, labels=labels, verify_adapters=False
+    )
+    frozen = read_json(root / FROZEN_SELECTION)
+    expected_gate = {
+        "model": report["model"],
+        "model_revision": report["model_revision"],
+        "selected_epoch": selected["epoch"],
+        "selected_adapter_dir": report["selection"]["selected_adapter_dir"],
+        "selected_adapter_hashes": report["selection"]["selected_adapter_hashes"],
+        "selection_rule": report["selection"]["rule"],
+        "validation_label_sha256": report["validation_label_sha256"],
+    }
+    for field, expected in expected_gate.items():
+        if frozen.get(field) != expected:
+            raise EvidenceError(f"frozen selection {field} does not match training evidence")
+
+    sources = {
+        "base": (report["base_validation_logits"], report["base_validation_metrics"]),
+        "tuned": (selected["validation_logits"], selected["validation"]),
+    }
+    temperatures = {}
+    for name, (logits_reference, metrics) in sources.items():
+        recorded = frozen["validation"][name]
+        if recorded["logits"] != logits_reference:
+            raise EvidenceError(
+                f"frozen {name} validation logits do not match training evidence"
+            )
+        _assert_metric_tree(f"frozen.{name}.metrics", recorded["metrics"], metrics)
+        logits = load_logits(logits_reference, root=root)
+        fitted_temperature = fit_temperature(logits, labels)
+        _assert_close(
+            f"frozen.{name}.temperature",
+            recorded["temperature"],
+            fitted_temperature,
+        )
+        _assert_close(
+            f"frozen.{name}.metrics_after_temperature.temperature",
+            recorded["metrics_after_temperature"]["temperature"],
+            fitted_temperature,
+        )
+        recompute_block(
+            logits,
+            labels,
+            recorded["metrics_after_temperature"],
+            f"frozen.{name}.metrics_after_temperature",
+        )
+        temperatures[name] = fitted_temperature
+    return temperatures
 
 
 def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:

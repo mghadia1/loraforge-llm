@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -105,8 +106,12 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
         "schema_version": 1,
         "test_evaluated": True,
         "test_evaluations_run": 1,
+        "split": "publisher test",
         "rows": len(LABELS),
         "test_label_sha256": sha256_labels(LABELS),
+        "model": frozen["model"],
+        "model_revision": frozen["model_revision"],
+        "selected_epoch": frozen["selected_epoch"],
         "config": default_config().to_dict(),
         "selected_adapter_hashes": frozen["selected_adapter_hashes"],
         "systems": {
@@ -168,6 +173,16 @@ def test_hand_edited_macro_f1_in_the_training_report_is_rejected(tmp_path) -> No
     write_json(report, path)
     with pytest.raises(EvidenceError, match="recompute"):
         verify_training_report(read_json(path), root=tmp_path, labels=LABELS)
+
+
+def test_hand_edited_per_class_metric_is_rejected(tmp_path) -> None:
+    make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = read_json(path)
+    report["epochs"][1]["validation"]["per_class"]["World"]["recall"] = 0.99
+
+    with pytest.raises(EvidenceError, match=r"epoch-2\.per_class\.World\.recall"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
 
 
 def test_swapped_logits_file_is_rejected_by_its_hash(tmp_path) -> None:
@@ -257,6 +272,13 @@ def test_final_test_requires_the_explicit_confirmation(tmp_path) -> None:
         run_final_test(default_config(), confirmation="yes", root=tmp_path)
 
 
+def test_validation_only_experiment_cannot_access_publisher_test(tmp_path) -> None:
+    config = replace(default_config(), test_evaluations_allowed=0)
+    config.validate()
+    with pytest.raises(EvidenceError, match="validation-only"):
+        run_final_test(config, confirmation=CONFIRMATION, root=tmp_path)
+
+
 def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
@@ -269,7 +291,9 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
     make_final_report(tmp_path)
-    verified = verify_final_report(root=tmp_path, labels=LABELS)
+    verified = verify_final_report(
+        root=tmp_path, labels=LABELS, validation_labels=LABELS
+    )
     assert verified["verified"] is True
     assert verified["macro_f1_delta"] > 0
 
@@ -283,7 +307,77 @@ def test_edited_final_test_number_is_rejected(tmp_path) -> None:
     report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"] = 0.999
     write_json(report, path)
     with pytest.raises(EvidenceError, match="tuned.before.macro_f1"):
-        verify_final_report(root=tmp_path, labels=LABELS)
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_final_report_temperature_must_match_the_validation_gate(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["systems"]["tuned"]["validation_fitted_temperature"] = 2.0
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="temperature fitted on validation"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("model",), "other/model", "model"),
+        (("model_revision",), "0" * 40, "model_revision"),
+        (("selected_epoch",), 1, "selected_epoch"),
+        (("selected_adapter_hashes", "total_bytes"), 0, "selected_adapter_hashes"),
+        (("config", "training", "epochs"), 99, "config"),
+        (("rows",), len(LABELS) - 1, "row count"),
+    ],
+)
+def test_final_report_provenance_must_match_frozen_evidence(
+    tmp_path, path, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    report_path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(report_path)
+    target = report
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+    write_json(report, report_path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_frozen_temperature_is_refitted_from_validation_logits(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["validation"]["base"]["temperature"] = 2.0
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match=r"frozen\.base\.temperature"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_edited_calibration_bin_is_rejected(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    bins = report["systems"]["tuned"]["metrics_after_temperature"]["calibration"]["bins"]
+    populated = next(item for item in bins if item["average_confidence"] is not None)
+    populated["average_confidence"] += 0.1
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match=r"tuned\.after\.calibration\.bins"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 def test_inflated_delta_is_rejected(tmp_path) -> None:
@@ -295,7 +389,7 @@ def test_inflated_delta_is_rejected(tmp_path) -> None:
     report["delta"]["macro_f1"] = 0.5
     write_json(report, path)
     with pytest.raises(EvidenceError, match="delta does not match"):
-        verify_final_report(root=tmp_path, labels=LABELS)
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 def test_a_negative_result_still_verifies(tmp_path) -> None:
@@ -303,7 +397,9 @@ def test_a_negative_result_still_verifies(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
     make_final_report(tmp_path, tuned_margin=-0.5)
-    verified = verify_final_report(root=tmp_path, labels=LABELS)
+    verified = verify_final_report(
+        root=tmp_path, labels=LABELS, validation_labels=LABELS
+    )
     assert verified["macro_f1_delta"] < 0
     assert json.loads(Path(tmp_path / "outputs" / "final-test-report.json").read_text())[
         "test_evaluations_run"
