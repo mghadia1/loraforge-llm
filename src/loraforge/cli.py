@@ -23,6 +23,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=Path("docs/evidence/formatted-examples.json")
     )
     examples.add_argument("--config", type=Path, help="validated experiment JSON")
+    token_audit = commands.add_parser(
+        "token-audit",
+        help="audit train/validation token lengths without loading publisher test",
+    )
+    token_audit.add_argument("--config", type=Path, help="validated experiment JSON")
+    token_audit.add_argument(
+        "--output", type=Path, default=Path("docs/evidence/token-length-audit.json")
+    )
+    token_audit.add_argument(
+        "--check",
+        action="store_true",
+        help="recompute and verify the existing output instead of overwriting it",
+    )
 
     train = commands.add_parser("train", help="run configured QLoRA training (needs a GPU)")
     train.add_argument("--root", type=Path, default=Path("."))
@@ -200,6 +213,39 @@ def main() -> int:
         return 0
 
     bundle = load_dataset(allow_test=False, config=config.data)
+    if args.command == "token-audit":
+        from transformers import AutoTokenizer
+
+        from .provenance import EvidenceError, read_json, write_json
+        from .token_audit import build_token_length_audit, verify_token_length_audit
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model_name,
+            revision=config.model_revision,
+        )
+        if args.check:
+            audit = verify_token_length_audit(
+                read_json(args.output), tokenizer, bundle, config
+            )
+        else:
+            audit = build_token_length_audit(tokenizer, bundle, config)
+            write_json(audit, args.output)
+            if not audit["safe_to_train_without_truncation"]:
+                raise EvidenceError(
+                    f"{audit['rows_over_max_sequence_length']} development rows exceed "
+                    f"max_sequence_length={config.training.max_sequence_length}; "
+                    f"failure evidence was written to {args.output}"
+                )
+        print(json.dumps({
+            "output": str(args.output),
+            "verified": args.check,
+            "development_rows": audit["development_rows"],
+            "rows_over_max_sequence_length": audit["rows_over_max_sequence_length"],
+            "safe_to_train_without_truncation": audit["safe_to_train_without_truncation"],
+            "test_loaded": audit["test_loaded"],
+        }))
+        return 0
+
     if args.command == "data-stats":
         write_stats(bundle, config.data, args.output)
         print(json.dumps(describe(bundle, config.data)))

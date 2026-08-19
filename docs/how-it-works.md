@@ -43,9 +43,13 @@ token, so the causal-LM loss trains only the answer code and EOS. Training on
 the prompt itself would waste capacity and blur what the classification loss
 means.
 
-A tokenizer-only audit found four development prompts above 384 tokens and a
-maximum of 432. The frozen maximum is therefore 512; none of the 10,000
-development articles are silently truncated.
+A tokenizer-only audit found four original-development prompts above 384 tokens
+and a maximum of 432. The frozen maximum is therefore 512; none of the original
+10,000 development articles are silently truncated. The expanded-data preset
+has its own reproducible train-only audit over all 18,000 development rows. The
+artifact binds its summaries to the config, split row IDs, tokenizer revision,
+and ordered per-row token lengths, while recording that publisher test was not
+loaded.
 
 ## QLoRA setup
 
