@@ -177,3 +177,29 @@ def test_different_articles_across_splits_are_not_flagged() -> None:
     train = Split("train", (Example(row_id="a", text="one story", label=0, source_index=0),))
     test = Split("test", (Example(row_id="b", text="another story", label=0, source_index=0),))
     assert_disjoint(train, test)
+
+
+def test_describe_reports_the_real_corpus_size_not_a_hardcoded_one() -> None:
+    """The unused-rows figure goes into an evidence artifact, so it must be derived."""
+    from loraforge.config import DataConfig
+    from loraforge.data import DatasetBundle, describe
+
+    train, validation = split("train", range(0, 40)), split("validation", range(40, 50))
+    config = DataConfig(train_per_class=10, validation_per_class=3)
+
+    measured = describe(DatasetBundle(train, validation, publisher_train_rows=200), config)
+    assert measured["publisher_train_rows"] == 200
+    assert measured["selection"]["unused_publisher_train_rows"] == 200 - 40 - 10
+
+    unknown = describe(DatasetBundle(train, validation), config)
+    assert unknown["publisher_train_rows"] is None
+    assert unknown["selection"]["unused_publisher_train_rows"] is None
+
+
+def test_hashing_an_empty_sequence_is_refused() -> None:
+    """The empty-string digest would compare equal to any other empty sequence."""
+    from loraforge.provenance import EvidenceError, sha256_labels
+
+    assert sha256_labels([0, 1]) != sha256_labels([1, 0])
+    with pytest.raises(EvidenceError, match="empty label sequence"):
+        sha256_labels([])

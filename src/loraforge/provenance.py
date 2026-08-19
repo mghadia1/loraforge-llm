@@ -71,6 +71,13 @@ def sha256_array(array: np.ndarray) -> str:
 
 
 def sha256_labels(labels: list[int]) -> str:
+    """Digest a label or prediction sequence, refusing an empty one.
+
+    Hashing nothing yields the well-known digest of the empty string, which would
+    compare equal to any other empty sequence and let a vacuous check pass.
+    """
+    if len(labels) == 0:
+        raise EvidenceError("refusing to hash an empty label sequence")
     payload = ",".join(str(int(value)) for value in labels).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
