@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 
 from .config import ExperimentConfig
+from .data import Split
 from .metrics import evaluation_block, softmax
 from .provenance import (
     EvidenceError,
@@ -179,9 +180,12 @@ def verify_final_report(
     root: Path = Path("."),
     labels: list[int] | None = None,
     validation_labels: list[int] | None = None,
+    test_split: Split | None = None,
 ) -> dict[str, Any]:
     """Recompute test metrics and prove calibration came from validation."""
     root = Path(root)
+    if labels is not None and test_split is not None:
+        raise ValueError("provide either labels or test_split, not both")
     report = read_json(root / FINAL_REPORT)
     if report.get("test_evaluations_run") != 1:
         raise EvidenceError("the final report must record exactly one test evaluation")
@@ -208,7 +212,11 @@ def verify_final_report(
     if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
         raise EvidenceError("final report must contain exactly the base and tuned systems")
 
-    if labels is None:
+    if test_split is not None:
+        labels = test_split.labels
+        if test_split.id_sha256() != report.get("test_row_ids_sha256"):
+            raise EvidenceError("publisher-test row IDs do not match the final report")
+    elif labels is None:
         from .config import DataConfig
         from .data import load_dataset
 
