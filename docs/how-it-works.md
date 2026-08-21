@@ -101,9 +101,10 @@ wall time, peak CUDA memory, package versions, and adapter hashes land in
 Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
 logits down to per-class precision/recall/F1 and every calibration bin, logits
-are checked against their SHA-256, and the selected epoch is re-derived from the
-rule rather than trusted. Epoch checkpoints are checked against their exact
-directory manifests. For a distributed selected adapter, every recorded
+are confined to repo-relative paths under the evidence root and checked against
+both their recorded array shape and SHA-256. The selected epoch is re-derived
+from the rule rather than trusted. Epoch checkpoints are checked against their
+exact directory manifests. For a distributed selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.

@@ -18,6 +18,7 @@ from loraforge.final_test import (
 from loraforge.metrics import evaluation_block, fit_temperature
 from loraforge.provenance import (
     EvidenceError,
+    load_logits,
     read_json,
     save_logits,
     sha256_directory,
@@ -196,6 +197,41 @@ def test_swapped_logits_file_is_rejected_by_its_hash(tmp_path) -> None:
         verify_training_report(
             read_json(tmp_path / "outputs" / "training-report.json"), root=tmp_path, labels=LABELS
         )
+
+
+def test_logit_reference_shape_is_verified(tmp_path) -> None:
+    reference = save_logits(
+        logits_for(LABELS, 1.0, seed=9),
+        tmp_path,
+        "outputs/logits/probe.npy",
+    )
+    reference["shape"] = [1, 4]
+
+    with pytest.raises(EvidenceError, match="shape .* does not match the recorded"):
+        load_logits(reference, root=tmp_path)
+
+
+@pytest.mark.parametrize("replacement", ["/tmp/probe.npy", "../probe.npy"])
+def test_logit_reference_must_stay_under_its_root(tmp_path, replacement) -> None:
+    reference = save_logits(
+        logits_for(LABELS, 1.0, seed=10),
+        tmp_path,
+        "outputs/logits/probe.npy",
+    )
+    reference["path"] = replacement
+
+    with pytest.raises(EvidenceError, match="repo-relative"):
+        load_logits(reference, root=tmp_path)
+
+
+def test_saving_logits_cannot_escape_the_evidence_root(tmp_path) -> None:
+    with pytest.raises(EvidenceError, match="repo-relative"):
+        save_logits(logits_for(LABELS, 1.0, seed=11), tmp_path, "../probe.npy")
+
+
+def test_saved_logit_path_requires_the_npy_suffix(tmp_path) -> None:
+    with pytest.raises(EvidenceError, match="must end in .npy"):
+        save_logits(logits_for(LABELS, 1.0, seed=12), tmp_path, "outputs/logits/probe")
 
 
 def test_modified_adapter_file_is_rejected(tmp_path) -> None:
