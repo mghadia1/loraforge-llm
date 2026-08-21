@@ -159,9 +159,32 @@ def environment() -> dict[str, Any]:
     return record
 
 
+def _resolve_logit_path(root: Path, relative_path: str) -> Path:
+    """Resolve a canonical ``.npy`` path without allowing evidence to escape ``root``."""
+    if not isinstance(relative_path, str) or not relative_path:
+        raise EvidenceError("logits path must be a nonempty repo-relative string")
+    candidate = Path(relative_path)
+    if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
+        raise EvidenceError(
+            f"logits path must stay repo-relative under its root: {relative_path!r}"
+        )
+    if candidate.suffix != ".npy":
+        raise EvidenceError(f"logits path must end in .npy: {relative_path!r}")
+
+    resolved_root = Path(root).resolve()
+    target = (resolved_root / candidate).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as error:
+        raise EvidenceError(
+            f"logits path escapes its evidence root: {relative_path!r}"
+        ) from error
+    return target
+
+
 def save_logits(array: np.ndarray, root: Path, relative_path: str) -> dict[str, Any]:
     """Write logits under ``root`` but record the repo-relative path, so evidence relocates."""
-    target = Path(root) / relative_path
+    target = _resolve_logit_path(root, relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     values = np.ascontiguousarray(np.asarray(array, dtype=np.float32))
     np.save(target, values)
@@ -173,15 +196,22 @@ def save_logits(array: np.ndarray, root: Path, relative_path: str) -> dict[str, 
 
 
 def load_logits(reference: dict[str, Any], *, root: Path = Path(".")) -> np.ndarray:
-    """Load a saved logit file and refuse it if its hash no longer matches the report."""
-    path = root / reference["path"]
+    """Load logits only when their path, shape, and hash match the report."""
+    if not isinstance(reference, dict):
+        raise EvidenceError("logits reference must be an object")
+    path = _resolve_logit_path(root, reference.get("path"))
     if not path.exists():
         raise EvidenceError(f"missing logits file {path}")
-    values = np.load(path).astype(np.float32)
-    actual = sha256_array(values)
-    if actual != reference["sha256"]:
+    values = np.load(path, allow_pickle=False).astype(np.float32)
+    actual_shape = list(values.shape)
+    if reference.get("shape") != actual_shape:
         raise EvidenceError(
-            f"{path} hash {actual} does not match the recorded {reference['sha256']}"
+            f"{path} shape {actual_shape} does not match the recorded {reference.get('shape')!r}"
+        )
+    actual = sha256_array(values)
+    if actual != reference.get("sha256"):
+        raise EvidenceError(
+            f"{path} hash {actual} does not match the recorded {reference.get('sha256')!r}"
         )
     return values
 
