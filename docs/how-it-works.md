@@ -119,6 +119,9 @@ pins the selected adapter, its hashes, the validation metrics, and the two
 validation-fitted temperatures. The final command refuses to run unless that
 file exists, refuses if the adapter's hash has changed since, refuses without an
 explicit confirmation string, and refuses to overwrite an existing final report.
+It also revalidates the experiment config at the entry point: the test budget
+must be the JSON integer `1` (not boolean `true`), and `resume_eligible` must
+remain `false` until the separate explanation gate passes.
 
 Both systems are scored from the same loaded model — adapter disabled for the
 base, enabled for the tuned — so the prompt, tokenizer, and quantization are

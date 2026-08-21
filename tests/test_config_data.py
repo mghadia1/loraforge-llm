@@ -39,6 +39,35 @@ def test_invalid_protocol_is_rejected() -> None:
         ExperimentConfig(test_evaluations_allowed=2).validate()
 
 
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_test_budget_is_rejected(tmp_path, value) -> None:
+    """JSON booleans must not inherit Python's integer test-budget semantics."""
+    path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    payload["test_evaluations_allowed"] = value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="JSON booleans are not a test budget"):
+        load_config(path)
+
+
+def test_resume_eligibility_cannot_be_enabled_by_config(tmp_path) -> None:
+    path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    payload["resume_eligible"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="separate explanation gate"):
+        load_config(path)
+
+
+def test_boolean_schema_version_is_not_version_one(tmp_path) -> None:
+    path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    payload["schema_version"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="unsupported experiment schema"):
+        load_config(path)
+
+
 def test_development_split_is_balanced_disjoint_and_deterministic() -> None:
     config = DataConfig(train_per_class=4, validation_per_class=2)
     first_train, first_validation = deterministic_development_split(
