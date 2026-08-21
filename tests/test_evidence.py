@@ -279,6 +279,12 @@ def test_validation_only_experiment_cannot_access_publisher_test(tmp_path) -> No
         run_final_test(config, confirmation=CONFIRMATION, root=tmp_path)
 
 
+def test_boolean_test_budget_cannot_access_publisher_test(tmp_path) -> None:
+    config = replace(default_config(), test_evaluations_allowed=True)
+    with pytest.raises(ValueError, match="JSON booleans are not a test budget"):
+        run_final_test(config, confirmation=CONFIRMATION, root=tmp_path)
+
+
 def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)

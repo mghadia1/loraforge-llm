@@ -64,6 +64,7 @@ def run_final_test(
     from .data import load_dataset
     from .modeling import attach_saved_adapter, load_quantized_base, score_class_codes
 
+    config.validate()
     root = Path(root)
     if config.test_evaluations_allowed != 1:
         raise EvidenceError(

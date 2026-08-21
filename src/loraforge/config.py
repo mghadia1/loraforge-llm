@@ -77,7 +77,7 @@ class ExperimentConfig:
     test_evaluations_allowed: int = 1
 
     def validate(self) -> None:
-        if self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version != 1:
             raise ValueError("unsupported experiment schema")
         if not self.quantization.load_in_4bit or self.quantization.quant_type != "nf4":
             raise ValueError("the frozen QLoRA protocol requires 4-bit NF4")
@@ -94,8 +94,18 @@ class ExperimentConfig:
             and self.data.validation_start_per_class < 0
         ):
             raise ValueError("validation_start_per_class must be non-negative")
-        if self.test_evaluations_allowed not in (0, 1):
-            raise ValueError("an experiment permits zero or one final test evaluation")
+        if (
+            type(self.test_evaluations_allowed) is not int
+            or self.test_evaluations_allowed not in (0, 1)
+        ):
+            raise ValueError(
+                "test_evaluations_allowed must be the integer zero or one; "
+                "JSON booleans are not a test budget"
+            )
+        if self.resume_eligible is not False:
+            raise ValueError(
+                "resume_eligible must remain false until the separate explanation gate passes"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
