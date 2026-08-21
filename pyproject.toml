@@ -15,6 +15,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+audit = [
+  "jinja2>=3.1,<4",
+  "transformers>=4.55,<6",
+]
 gpu = [
   "accelerate>=1.10,<2",
   "bitsandbytes>=0.47,<1",
