@@ -74,7 +74,9 @@ The untuned and tuned systems use identical prompts and A–D scoring. Validatio
 selects the adapter and fits a temperature for each system. The one final test
 run reports macro-F1, per-class metrics, NLL, ECE before/after temperature, and
 invalid-output rate. Temperature scaling cannot change argmax predictions, so
-it cannot improve macro-F1.
+it cannot improve macro-F1. Metric computation rejects non-finite or wrongly
+shaped logits, invalid labels/probabilities, non-positive calibration-bin counts,
+and invalid temperature-search bounds instead of emitting plausible numbers.
 
 ## Training the two frozen epochs
 
