@@ -8,3 +8,4 @@
 - 2026-08-21 10:48 MST — Hardened config and final-test gates so JSON booleans cannot masquerade as test budgets or schema versions, and `resume_eligible` cannot be enabled before the explanation gate.
 - 2026-08-21 15:36 MST — Merged PRs #5–#7, reconciled PR #4 with the integrated verifier/config/token-audit changes, and passed 157 tests, reports-only plus strict rank-16 verification, rank-4 payload verification, the controlled comparison, and the train-only token audit.
 - 2026-08-21 15:42 MST — Hardened logit references to reject false shapes, absolute/out-of-root paths, and non-`.npy` targets; 162 tests plus reports-only and strict rank-16 evidence verification passed.
+- 2026-08-21 15:48 MST — Made four-class metric and calibration inputs fail closed on zero/invalid ECE bins, malformed probabilities/logits/labels, and invalid temperature-search bounds while preserving float32 evidence semantics; 175 tests plus reports-only and strict verification passed.

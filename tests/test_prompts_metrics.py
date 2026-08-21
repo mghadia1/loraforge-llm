@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from loraforge.metrics import (
+    evaluate_predictions,
     evaluation_block,
     expected_calibration_error,
     fit_temperature,
@@ -131,6 +132,56 @@ def test_ece_zero_when_confidence_matches_accuracy() -> None:
     probabilities = np.tile([0.7, 0.1, 0.1, 0.1], (100, 1))
     labels = [0] * 70 + [1] * 30
     assert expected_calibration_error(probabilities, labels, n_bins=10)["ece"] == pytest.approx(0)
+
+
+@pytest.mark.parametrize("n_bins", [0, -1, True, 1.5])
+def test_ece_requires_a_positive_integer_bin_count(n_bins) -> None:
+    probabilities = np.array([[0.7, 0.1, 0.1, 0.1]])
+    with pytest.raises(ValueError, match="n_bins must be a positive integer"):
+        expected_calibration_error(probabilities, [0], n_bins=n_bins)
+
+
+@pytest.mark.parametrize(
+    "probabilities",
+    [
+        np.array([[1.1, -0.1, 0.0, 0.0]]),
+        np.array([[np.nan, 0.0, 0.0, 1.0]]),
+    ],
+)
+def test_ece_rejects_invalid_probabilities(probabilities) -> None:
+    with pytest.raises(ValueError, match="probabilities must"):
+        expected_calibration_error(probabilities, [0])
+
+
+def test_metrics_reject_invalid_labels_and_logit_shapes() -> None:
+    with pytest.raises(ValueError, match="class IDs 0 through 3"):
+        evaluation_block(np.zeros((1, 4)), [-1])
+    with pytest.raises(ValueError, match=r"shape \[rows, 4\]"):
+        evaluation_block(np.zeros((1, 5)), [0])
+    with pytest.raises(ValueError, match="finite values"):
+        evaluation_block(np.array([[np.inf, 0.0, 0.0, 0.0]]), [0])
+
+
+def test_invalid_predictions_remain_measured_not_silently_dropped() -> None:
+    report = evaluate_predictions([0, 1], [0, 9])
+    assert report["accuracy"] == pytest.approx(0.5)
+    assert report["invalid_prediction_rate"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"low": 0.0},
+        {"low": 2.0, "high": 1.0},
+        {"tolerance": 0.0},
+        {"tolerance": -1.0},
+        {"low": 1.0, "high": 2.0, "tolerance": 1.0},
+    ],
+)
+def test_temperature_search_rejects_invalid_bounds(kwargs) -> None:
+    logits = np.eye(4, dtype=float)
+    with pytest.raises(ValueError, match="temperature search"):
+        fit_temperature(logits, [0, 1, 2, 3], **kwargs)
 
 
 def test_temperature_scaling_does_not_change_argmax() -> None:
