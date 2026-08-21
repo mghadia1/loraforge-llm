@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from loraforge.config import default_config
+from loraforge.data import Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
     _system_block,
@@ -296,6 +297,38 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
     )
     assert verified["verified"] is True
     assert verified["macro_f1_delta"] > 0
+
+
+def test_preloaded_test_split_still_checks_ordered_row_ids(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    test = Split(
+        "test",
+        tuple(
+            Example(
+                row_id=f"test-{index}",
+                text=f"article {index}",
+                label=label,
+                source_index=index,
+            )
+            for index, label in enumerate(LABELS)
+        ),
+    )
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["test_row_ids_sha256"] = test.id_sha256()
+    write_json(report, path)
+
+    assert verify_final_report(
+        root=tmp_path, validation_labels=LABELS, test_split=test
+    )["verified"] is True
+
+    reordered = Split("test", tuple(reversed(test.examples)))
+    with pytest.raises(EvidenceError, match="row IDs"):
+        verify_final_report(
+            root=tmp_path, validation_labels=LABELS, test_split=reordered
+        )
 
 
 def test_edited_final_test_number_is_rejected(tmp_path) -> None:

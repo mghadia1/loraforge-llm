@@ -99,6 +99,9 @@ Every reported number is recomputable from raw logits stored next to it, and
 logits down to per-class precision/recall/F1 and every calibration bin, logits
 are checked against their SHA-256, adapters are checked against their directory
 hash, and the selected epoch is re-derived from the rule rather than trusted.
+The CLI loads each required pinned publisher split once and shares its ordered
+validation and test labels across every verifier stage, so a full reports-only
+check does not repeatedly reopen the same held-out data.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
