@@ -106,12 +106,16 @@ def test_the_card_reports_the_run_it_was_generated_from(tmp_path) -> None:
     assert "10,485,760" in card and "0.1445%" in card
 
 
-def test_limitations_name_the_cheap_baseline_and_the_missing_seed_variance(tmp_path) -> None:
+def test_limitations_do_not_invent_unrecorded_comparisons_or_error_analysis(tmp_path) -> None:
     make_run(tmp_path)
     card = build_model_card(root=tmp_path)
-    assert "0.887" in card  # the TF-IDF comparison a reader deserves to see
     assert "training variance across seeds has not been measured" in card
+    assert "separately measured classical baseline" in card
+    assert "no annotated error-analysis artifact" in card
     assert "not a result" in card  # the constrained-decoding caveat
+    assert "0.887" not in card
+    assert "about a second" not in card
+    assert "roughly half" not in card
 
 
 def test_writing_the_card_never_touches_the_adapter_directory(tmp_path) -> None:

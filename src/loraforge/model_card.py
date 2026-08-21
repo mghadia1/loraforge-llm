@@ -218,13 +218,12 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     )
     add(
         "- The comparison is against the same untuned base model, not against full "
-        "fine-tuning or a different architecture. A TF-IDF and logistic-regression "
-        "baseline reaches 0.887 validation macro-F1 in about a second of CPU time, so the "
-        "adapter's advantage should be weighed against its cost."
+        "fine-tuning, a different architecture, or a separately measured classical "
+        "baseline."
     )
     add(
-        "- Labels in this dataset are genuinely ambiguous between Business and Sci/Tech, "
-        "which accounts for roughly half the remaining errors.\n"
+        "- The run records aggregate and per-class metrics, but no annotated error-analysis "
+        "artifact; it therefore does not support causal claims about the remaining errors.\n"
     )
 
     add("## Usage\n")

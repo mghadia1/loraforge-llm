@@ -123,6 +123,11 @@ checks the ordered row-ID digest. Editing any stored metric, provenance field,
 or calibration temperature by hand makes verification fail — which is the
 point. The GPU-free tests include exactly those tamper cases.
 
+Generated model cards quote measured run values only from the run reports. If
+there is no artifact for a classical baseline or annotated error analysis, the
+card states that limitation instead of inserting a remembered estimate or an
+unsupported explanation.
+
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
 zero-new-evaluations claim, bootstrap settings and no-improvement count, paired
