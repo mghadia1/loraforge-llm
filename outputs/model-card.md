@@ -54,8 +54,8 @@ The prompt asks for one code — `A`=World, `B`=Sports, `C`=Business, `D`=Sci/Te
 - Trained and evaluated only on fancyzhx/ag_news: short English news headlines with a single topic label. Nothing here supports use on other domains, longer documents, or safety-critical decisions.
 - One seed, one hardware run. Test-set sampling uncertainty has been quantified for the reference run; training variance across seeds has not been measured.
 - Only 8,000 of the publisher's 120,000 training rows were used.
-- The comparison is against the same untuned base model, not against full fine-tuning or a different architecture. A TF-IDF and logistic-regression baseline reaches 0.887 validation macro-F1 in about a second of CPU time, so the adapter's advantage should be weighed against its cost.
-- Labels in this dataset are genuinely ambiguous between Business and Sci/Tech, which accounts for roughly half the remaining errors.
+- The comparison is against the same untuned base model, not against full fine-tuning, a different architecture, or a separately measured classical baseline.
+- The run records aggregate and per-class metrics, but no annotated error-analysis artifact; it therefore does not support causal claims about the remaining errors.
 
 ## Usage
 
