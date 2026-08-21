@@ -21,6 +21,10 @@ specific dataset commit. Within each class, publisher-train rows receive stable
 row IDs and are ordered by a seed-bound SHA-256. The first 2,000 per class form
 training; the next 500 form validation. This yields balanced, disjoint, exactly
 reproducible 8,000/2,000 subsets without depending on a library RNG version.
+Row IDs retain their publisher split and source index for provenance, while
+leak detection separately hashes the normalized text actually shown to the
+model. The latter hash has no split namespace, so duplicate content is rejected
+even across publisher train and test splits or when whitespace differs.
 
 The default loader asks Hugging Face for `split="train"` only; it does not even
 request the publisher test split. A caller must explicitly set `allow_test=True`,
@@ -97,8 +101,12 @@ wall time, peak CUDA memory, package versions, and adapter hashes land in
 Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
 logits down to per-class precision/recall/F1 and every calibration bin, logits
-are checked against their SHA-256, adapters are checked against their directory
-hash, and the selected epoch is re-derived from the rule rather than trusted.
+are checked against their SHA-256, and the selected epoch is re-derived from the
+rule rather than trusted. Epoch checkpoints are checked against their exact
+directory manifests. For a distributed selected adapter, every recorded
+configuration and weight file remains hash-checked even if its Hugging Face
+`README.md` changes as distribution metadata. Locally generated model cards are
+written under `outputs/`, outside the adapter payload.
 The CLI loads each required pinned publisher split once and shares its ordered
 validation and test labels across every verifier stage, so a full reports-only
 check does not repeatedly reopen the same held-out data.
@@ -111,6 +119,12 @@ row count is always checked; when the verifier loads the pinned dataset, it also
 checks the ordered row-ID digest. Editing any stored metric, provenance field,
 or calibration temperature by hand makes verification fail — which is the
 point. The GPU-free tests include exactly those tamper cases.
+
+The schema-v2 intervals report is also bound to the exact final-report SHA-256.
+Verification recomputes its entire deterministic tree, including the scope,
+zero-new-evaluations claim, bootstrap settings and no-improvement count, paired
+counts, and McNemar statistics. Extremely small p-values carry a scientific
+string so float underflow can never turn them into a false zero.
 
 ## The one test evaluation
 

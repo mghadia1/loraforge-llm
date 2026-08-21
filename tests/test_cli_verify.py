@@ -5,6 +5,7 @@ import sys
 
 from loraforge import cli
 from loraforge.data import DatasetBundle, Example, Split
+from loraforge.intervals import INTERVALS_REPORT
 
 
 def one_row_split(name: str, label: int) -> Split:
@@ -22,7 +23,7 @@ def write_report_markers(root, *, with_test: bool) -> None:
     )
     if with_test:
         (outputs / "final-test-report.json").write_text("{}", encoding="utf-8")
-        (outputs / "test-intervals.json").write_text("{}", encoding="utf-8")
+        (root / INTERVALS_REPORT).write_text("{}", encoding="utf-8")
 
 
 def test_verify_loads_the_pinned_dataset_once_for_every_report(

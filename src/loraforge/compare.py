@@ -8,10 +8,14 @@ being studied.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
 from .provenance import EvidenceError, read_json
+
+
+MISSING = {"present": False}
 
 
 def flatten(payload: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -26,20 +30,40 @@ def flatten(payload: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 
 def differences(left: dict[str, Any], right: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
     keys = set(left) | set(right)
-    return {
-        key: (left.get(key), right.get(key))
-        for key in sorted(keys)
-        if left.get(key) != right.get(key)
-    }
+    output = {}
+    for key in sorted(keys):
+        left_present = key in left
+        right_present = key in right
+        left_value = left[key] if left_present else MISSING
+        right_value = right[key] if right_present else MISSING
+        if left_present != right_present or left_value != right_value:
+            output[key] = (left_value, right_value)
+    return output
 
 
-def _selected_macro_f1(report: dict[str, Any]) -> float:
-    """Validation macro-F1 of the epoch this report says it selected."""
-    epoch = report["selection"]["selected_epoch"]
-    for entry in report["epochs"]:
-        if entry["epoch"] == epoch:
-            return entry["validation"]["macro_f1"]
-    raise EvidenceError(f"report selects epoch {epoch}, which is not among its epochs")
+def _selected_macro_f1(report: dict[str, Any], name: str) -> float:
+    """Use the declared checkpoint only after reapplying the selection rule."""
+    from .training import select_checkpoint
+
+    epochs = report.get("epochs")
+    selection = report.get("selection")
+    if not isinstance(epochs, list) or not isinstance(selection, dict):
+        raise EvidenceError(f"{name} report has no checkpoint selection evidence")
+    declared_epoch = selection.get("selected_epoch")
+    if declared_epoch not in [entry.get("epoch") for entry in epochs if isinstance(entry, dict)]:
+        raise EvidenceError(
+            f"{name} report selects epoch {declared_epoch}, which is not among its epochs"
+        )
+    selected = select_checkpoint(epochs)
+    if declared_epoch != selected.get("epoch"):
+        raise EvidenceError(f"{name} report selected epoch does not follow the selection rule")
+    try:
+        value = float(selected["validation"]["macro_f1"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise EvidenceError(f"{name} selected validation macro-F1 is invalid") from error
+    if not math.isfinite(value):
+        raise EvidenceError(f"{name} selected validation macro-F1 is not finite")
+    return value
 
 
 def compare_runs(
@@ -61,13 +85,30 @@ def compare_runs(
     # torch comes from the host image and is reported rather than policed; every
     # other library is installed by us and must match for the comparison to hold.
     blocking_packages = {k: v for k, v in package_drift.items() if k != "torch"}
-    controlled = not blocking_packages and not unexpected_config and not missing_expected
+    gpu = [
+        baseline["environment"].get("gpu_name"),
+        variant["environment"].get("gpu_name"),
+    ]
+    gpu_matches = gpu[0] is not None and gpu[0] == gpu[1]
+    validation_hashes = [
+        baseline.get("validation_label_sha256"),
+        variant.get("validation_label_sha256"),
+    ]
+    validation_data_matches = (
+        isinstance(validation_hashes[0], str)
+        and validation_hashes[0]
+        and validation_hashes[0] == validation_hashes[1]
+    )
+    controlled = (
+        not blocking_packages
+        and not unexpected_config
+        and not missing_expected
+        and gpu_matches
+        and validation_data_matches
+    )
 
-    # Read the checkpoint the selection rule actually chose. Taking the maximum
-    # would silently describe a different checkpoint whenever the documented
-    # tie-break (earlier epoch wins) disagrees with argmax.
-    baseline_best = _selected_macro_f1(baseline)
-    variant_best = _selected_macro_f1(variant)
+    baseline_best = _selected_macro_f1(baseline, "baseline")
+    variant_best = _selected_macro_f1(variant, "variant")
     return {
         "controlled": controlled,
         "package_differences": package_drift,
@@ -75,10 +116,10 @@ def compare_runs(
         "config_differences": config_drift,
         "unexpected_config_differences": unexpected_config,
         "expected_changes_not_found": missing_expected,
-        "gpu": [
-            baseline["environment"].get("gpu_name"),
-            variant["environment"].get("gpu_name"),
-        ],
+        "gpu": gpu,
+        "gpu_matches": gpu_matches,
+        "validation_label_sha256": validation_hashes,
+        "validation_data_matches": validation_data_matches,
         "selected_epoch": {
             "baseline": baseline["selection"]["selected_epoch"],
             "variant": variant["selection"]["selected_epoch"],
@@ -111,6 +152,13 @@ def require_controlled(comparison: dict[str, Any]) -> None:
     if comparison["expected_changes_not_found"]:
         reasons.append(
             f"the fields under test did not actually change: {comparison['expected_changes_not_found']}"
+        )
+    if not comparison["gpu_matches"]:
+        reasons.append(f"GPU model changed or is missing: {comparison['gpu']}")
+    if not comparison["validation_data_matches"]:
+        reasons.append(
+            "validation label digest changed or is missing: "
+            f"{comparison['validation_label_sha256']}"
         )
     raise EvidenceError(
         "this comparison is not controlled, so a difference cannot be attributed to the "

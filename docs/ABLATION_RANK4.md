@@ -70,8 +70,10 @@ this arm and must not be used.
 # Rank-4 ablation — result
 
 Run August 18, 2026 on a Colab Tesla T4. `loraforge compare-runs --strict` confirms
-the comparison is controlled: identical library stack, same GPU model, and the only
-config differences are the two under test plus the removed test budget.
+the comparison is controlled: identical library stack, same GPU model, the same
+validation-label digest, and the only config differences are the two under test
+plus the removed test budget. The command reapplies the checkpoint-selection rule
+and reports the selected epochs rather than the maximum metric in isolation.
 
 | | rank 16 | rank 4 |
 |---|---:|---:|

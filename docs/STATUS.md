@@ -80,6 +80,7 @@ optimization did not change the experimental contract.
 | `outputs/training-report.json` | verified |
 | `outputs/frozen-selection.json` | verified, test-evaluated marker true |
 | `outputs/final-test-report.json` | verified |
+| `outputs/test-intervals-v2.json` | schema v2; final-report hash bound |
 | `outputs/logits/*.npy` | verified against recorded array hashes |
 | selected adapter | release asset; inner and archive hashes pinned |
 

@@ -77,8 +77,12 @@ def test_bootstrap_rejects_bad_settings() -> None:
         bootstrap_delta(LABELS, same, same, alpha=0.0, resamples=10)
     with pytest.raises(ValueError, match="resamples"):
         bootstrap_delta(LABELS, same, same, resamples=0)
-    with pytest.raises(ValueError, match="same length"):
+    with pytest.raises(ValueError, match="same nonzero length"):
         bootstrap_delta(LABELS, same[:10], same, resamples=10)
+    with pytest.raises(ValueError, match="nonzero"):
+        bootstrap_delta(np.array([], dtype=int), np.array([], dtype=int), np.array([], dtype=int))
+    with pytest.raises(ValueError, match="class IDs"):
+        bootstrap_delta(LABELS, same, np.full_like(LABELS, 4), resamples=10)
 
 
 def test_paired_counts_are_exact() -> None:
@@ -110,6 +114,8 @@ def test_mcnemar_is_decisive_for_a_lopsided_split() -> None:
     assert result["discordant_pairs"] == 1706
     assert result["log10_p_value"] < -250
     assert result["chi_square"] > 1000
+    assert result["p_value"] is not None and result["p_value"] > 0
+    assert result["p_value_scientific"].endswith("e-317")
 
 
 def test_mcnemar_handles_perfect_agreement_and_rejects_negatives() -> None:
@@ -119,6 +125,8 @@ def test_mcnemar_handles_perfect_agreement_and_rejects_negatives() -> None:
     assert agreed["log10_p_value"] is None
     with pytest.raises(ValueError, match="negative"):
         mcnemar(-1, 3)
+    with pytest.raises(ValueError, match="integers"):
+        mcnemar(1.5, 3)
 
 
 def test_small_lopsided_split_has_a_representable_p_value() -> None:
@@ -145,6 +153,8 @@ def make_final_test_report(tmp_path, base, tuned, labels):
     write_json(
         {
             "config": {"data": {}},
+            "test_evaluated": True,
+            "test_evaluations_run": 1,
             "test_label_sha256": sha256_labels(list(labels)),
             "systems": systems,
         },
@@ -160,7 +170,7 @@ def test_intervals_round_trip_and_spend_no_test_budget(tmp_path) -> None:
     tuned = predictions_with_accuracy(labels, 370, seed=8)
     make_final_test_report(tmp_path, base, tuned, labels)
 
-    built = build_intervals(root=tmp_path, resamples=100, labels=list(labels))
+    built = build_intervals(root=tmp_path, labels=list(labels))
     assert built["new_test_evaluations"] == 0
     assert built["bootstrap"]["delta"]["ci_lower"] > 0
     assert verify_intervals(root=tmp_path, labels=list(labels))["verified"] is True
@@ -174,7 +184,7 @@ def test_edited_confidence_interval_is_rejected(tmp_path) -> None:
     base = predictions_with_accuracy(labels, 220, seed=9)
     tuned = predictions_with_accuracy(labels, 370, seed=10)
     make_final_test_report(tmp_path, base, tuned, labels)
-    build_intervals(root=tmp_path, resamples=100, labels=list(labels))
+    build_intervals(root=tmp_path, labels=list(labels))
 
     stored = read_json(tmp_path / INTERVALS_REPORT)
     stored["bootstrap"]["delta"]["ci_lower"] = 0.99
@@ -191,12 +201,63 @@ def test_edited_paired_counts_are_rejected(tmp_path) -> None:
     base = predictions_with_accuracy(labels, 220, seed=11)
     tuned = predictions_with_accuracy(labels, 370, seed=12)
     make_final_test_report(tmp_path, base, tuned, labels)
-    build_intervals(root=tmp_path, resamples=50, labels=list(labels))
+    build_intervals(root=tmp_path, labels=list(labels))
 
     stored = read_json(tmp_path / INTERVALS_REPORT)
     stored["paired"]["tuned_broke_base_success"] = 0
     write_json(stored, tmp_path / INTERVALS_REPORT)
-    with pytest.raises(EvidenceError, match="paired disagreement"):
+    with pytest.raises(EvidenceError, match="paired.tuned_broke_base_success"):
+        verify_intervals(root=tmp_path, labels=list(labels))
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("new_test_evaluations",), 99, "new_test_evaluations"),
+        (("scope",), "training variance measured", "scope"),
+        (("bootstrap", "resamples_without_improvement"), 99, "resamples_without_improvement"),
+        (("bootstrap", "settings", "resamples"), 2_000.0, "must be an integer"),
+        (("test_label_sha256",), "0" * 64, "test_label_sha256"),
+    ],
+)
+def test_every_headline_interval_claim_is_verified(
+    tmp_path, path, replacement, message
+) -> None:
+    from loraforge.intervals import INTERVALS_REPORT, build_intervals, verify_intervals
+    from loraforge.provenance import EvidenceError, read_json, write_json
+
+    labels = LABELS
+    base = predictions_with_accuracy(labels, 220, seed=15)
+    tuned = predictions_with_accuracy(labels, 370, seed=16)
+    make_final_test_report(tmp_path, base, tuned, labels)
+    build_intervals(root=tmp_path, labels=list(labels))
+    stored = read_json(tmp_path / INTERVALS_REPORT)
+    target = stored
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+    write_json(stored, tmp_path / INTERVALS_REPORT)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_intervals(root=tmp_path, labels=list(labels))
+
+
+def test_intervals_are_bound_to_the_exact_final_report(tmp_path) -> None:
+    from loraforge.intervals import build_intervals, verify_intervals
+    from loraforge.provenance import EvidenceError, read_json, write_json
+
+    labels = LABELS
+    base = predictions_with_accuracy(labels, 220, seed=17)
+    tuned = predictions_with_accuracy(labels, 370, seed=18)
+    make_final_test_report(tmp_path, base, tuned, labels)
+    build_intervals(root=tmp_path, labels=list(labels))
+
+    report_path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(report_path)
+    report["unrelated_edit"] = True
+    write_json(report, report_path)
+
+    with pytest.raises(EvidenceError, match="not bound"):
         verify_intervals(root=tmp_path, labels=list(labels))
 
 
@@ -211,4 +272,4 @@ def test_swapped_logits_file_is_rejected_by_prediction_hash(tmp_path) -> None:
     np.save(tmp_path / "outputs" / "logits" / "tuned-test.npy",
             np.zeros((len(labels), 4), dtype=np.float32))
     with pytest.raises(EvidenceError):
-        build_intervals(root=tmp_path, resamples=50, labels=list(labels))
+        build_intervals(root=tmp_path, labels=list(labels))

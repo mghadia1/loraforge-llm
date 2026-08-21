@@ -38,7 +38,8 @@ The held-out split was evaluated **once**, after the checkpoint and calibration 
 - Data: `fancyzhx/ag_news` at revision `eb185aade064a813bc0b7f42de02595523103ca4`, 8,000 training and 2,000 validation rows, balanced across four classes, selected deterministically with seed 73
 - Quantization: 4-bit NF4, double quantization, float16 compute
 - LoRA: rank 16, alpha 32, dropout 0.05, targeting `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`
-- Trainable parameters: **not recorded by this run (it predates the parameter audit)**
+- Trainable parameters: **41,943,040** (measured in `outputs/qlora-setup.json`; this
+  run did not record an audited unpacked denominator, so no precise percentage is claimed)
 - Optimization: 2 epochs, learning rate 0.0002, effective batch 16, paged_adamw_8bit, 3% warmup
 - Loss is computed **only** on the answer token and EOS; every prompt token is masked with `-100`
 - Hardware: Tesla T4, 3.63 h, peak 5.77 GiB CUDA

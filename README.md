@@ -52,6 +52,7 @@ The repository includes:
 
 - phase-one baseline/setup evidence;
 - training report, frozen selection, and final test report;
+- schema-v2 test intervals bound to the exact final-report SHA-256;
 - raw validation and test logits;
 - deterministic split and prompt audits;
 - GPU-free tests for leakage, masking, selection, hashes, metric
@@ -72,6 +73,9 @@ not run the model or require adapter files. It selects epoch 2 again,
 recomputes every stored metric and logit hash, and explicitly reports
 `adapter_files_verified: false`. Strict verification remains the default and
 also checks both checkpoint directories plus the selected adapter.
+The selected adapter's executable payload (configuration and weights) remains
+strictly hash-checked; its Hugging Face `README.md` is mutable distribution
+metadata and is deliberately excluded from that payload comparison.
 
 ## Expanded-data follow-up (validation only)
 
@@ -135,6 +139,8 @@ The large weights are intentionally excluded from normal Git history.
   metrics and provenance.
 - [`outputs/frozen-selection.json`](outputs/frozen-selection.json): pre-test
   checkpoint and calibration decision.
+- [`outputs/test-intervals-v2.json`](outputs/test-intervals-v2.json): frozen
+  2,000-resample uncertainty analysis, hash-bound to the final report.
 - [`notebooks/loraforge_t4_phase2_fresh.ipynb`](notebooks/loraforge_t4_phase2_fresh.ipynb):
   safe training/freeze notebook.
 

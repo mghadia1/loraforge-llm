@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from collections import Counter
 from dataclasses import dataclass
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -85,21 +87,51 @@ class DatasetBundle:
         return self.test
 
 
+def normalize_article_text(text: str) -> str:
+    """Return the exact article text presented to the model."""
+    if not isinstance(text, str):
+        raise ValueError(f"article text must be a string, got {type(text).__name__}")
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        raise ValueError("article text cannot be empty")
+    return cleaned
+
+
 def _row_id(source_split: str, index: int, text: str, label: int) -> str:
     raw = f"{source_split}\0{index}\0{label}\0{text}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
+def _content_id(text: str) -> str:
+    """Hash model-visible content without split/index namespaces."""
+    return hashlib.sha256(normalize_article_text(text).encode("utf-8")).hexdigest()
+
+
 def _to_examples(source_split: str, rows: Iterable[dict[str, Any]]) -> list[Example]:
-    return [
-        Example(
-            row_id=_row_id(source_split, index, str(row["text"]), int(row["label"])),
-            text=str(row["text"]),
-            label=int(row["label"]),
-            source_index=index,
+    examples = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping) or "text" not in row or "label" not in row:
+            raise ValueError(f"{source_split} row {index} must contain text and label fields")
+        text = row["text"]
+        label = row["label"]
+        normalize_article_text(text)
+        if isinstance(label, bool) or not isinstance(label, Integral):
+            raise ValueError(
+                f"{source_split} row {index} label must be an integer, "
+                f"got {type(label).__name__}"
+            )
+        label = int(label)
+        if label not in range(len(CLASS_NAMES)):
+            raise ValueError(f"{source_split} row {index} has unexpected class label {label}")
+        examples.append(
+            Example(
+                row_id=_row_id(source_split, index, text, label),
+                text=text,
+                label=label,
+                source_index=index,
+            )
         )
-        for index, row in enumerate(rows)
-    ]
+    return examples
 
 
 def deterministic_development_split(
@@ -146,31 +178,18 @@ def deterministic_development_split(
     return train_split, validation_split
 
 
-def content_id(example: Example) -> str:
-    """Identity of a row by what it contains, independent of which split it came from.
-
-    `row_id` mixes the source split name into its digest, so the same article in
-    the publisher's train and test splits gets two different row_ids. Comparing
-    row_ids across splits therefore compares two namespaces that cannot intersect,
-    and the check silently passes no matter what the data holds. Content identity
-    is what a cross-split leak actually means.
-    """
-    payload = f"{example.label}\0{' '.join(example.text.split())}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
 def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
     """Refuse any overlap between rows trained on and rows used to judge training."""
     shared_rows = {item.row_id for item in trained_on.examples} & {
         item.row_id for item in judged_on.examples
     }
-    shared_content = {content_id(item) for item in trained_on.examples} & {
-        content_id(item) for item in judged_on.examples
+    shared_content = {_content_id(item.text) for item in trained_on.examples} & {
+        _content_id(item.text) for item in judged_on.examples
     }
     shared = shared_rows or shared_content
     if shared:
         kind = (
-            "also appear in" if shared_rows else "share identical article text and label with"
+            "also appear in" if shared_rows else "share identical model-visible article text with"
         )
         raise SplitLeakError(
             f"{len(shared)} of {len(judged_on)} {judged_on.name} rows {kind} "

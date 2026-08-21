@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "created_at_utc": "2026-08-19T05:59:52Z",
+  "source_report": "outputs/final-test-report.json",
+  "source_report_sha256": "8b9e3d7ba16c55d2e95410cffe81d3b8847705ce02c777dc79eb221f435df3e2",
+  "test_label_sha256": "85c6865d19a612a8a1f6ef28eff6aac442e936971776a66221526590019b433a",
+  "new_test_evaluations": 0,
+  "scope": "sampling uncertainty of the single stored test run; training/seed variance is NOT measured here and needs additional training runs",
+  "bootstrap": {
+    "base": {
+      "macro_f1": 0.7261902147623102,
+      "ci_lower": 0.7167966217375401,
+      "ci_upper": 0.7357005105583828,
+      "ci_width": 0.018903888820842707
+    },
+    "tuned": {
+      "macro_f1": 0.9332520991438105,
+      "ci_lower": 0.9275697843610857,
+      "ci_upper": 0.9385911067429039,
+      "ci_width": 0.011021322381818188
+    },
+    "delta": {
+      "delta": 0.2070618843815003,
+      "ci_lower": 0.19703763342335776,
+      "ci_upper": 0.2166494449620318,
+      "ci_width": 0.019611811538674057
+    },
+    "resamples_without_improvement": 0,
+    "settings": {
+      "resamples": 2000,
+      "seed": 73,
+      "alpha": 0.05,
+      "method": "paired percentile bootstrap over test rows"
+    }
+  },
+  "paired": {
+    "rows": 7600,
+    "disagreements": 1767,
+    "tuned_fixed_base_error": 1577,
+    "tuned_broke_base_success": 129,
+    "both_correct": 5516,
+    "both_wrong": 378,
+    "mcnemar": {
+      "discordant_pairs": 1706,
+      "chi_square": 1227.320633059789,
+      "log10_p_value": -316.14715943205175,
+      "p_value": 7.1259138e-317,
+      "p_value_scientific": "7.12591385626e-317"
+    }
+  }
+}

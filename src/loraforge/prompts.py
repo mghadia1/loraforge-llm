@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .data import CLASS_CODES, CLASS_NAMES, CODE_TO_LABEL, LABEL_TO_CODE
+from .data import (
+    CLASS_CODES,
+    CLASS_NAMES,
+    CODE_TO_LABEL,
+    LABEL_TO_CODE,
+    normalize_article_text,
+)
 
 
 LABEL_MENU = "; ".join(
@@ -18,9 +24,7 @@ SYSTEM_PROMPT = (
 
 
 def inference_messages(text: str) -> list[dict[str, str]]:
-    cleaned = " ".join(text.split())
-    if not cleaned:
-        raise ValueError("article text cannot be empty")
+    cleaned = normalize_article_text(text)
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Article:\n{cleaned}\n\nTopic code:"},
