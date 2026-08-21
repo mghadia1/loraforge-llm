@@ -47,9 +47,13 @@ token, so the causal-LM loss trains only the answer code and EOS. Training on
 the prompt itself would waste capacity and blur what the classification loss
 means.
 
-A tokenizer-only audit found four development prompts above 384 tokens and a
-maximum of 432. The frozen maximum is therefore 512; none of the 10,000
-development articles are silently truncated.
+A tokenizer-only audit found four original-development prompts above 384 tokens
+and a maximum of 432. The frozen maximum is therefore 512; none of the original
+10,000 development articles are silently truncated. The expanded-data preset
+has its own reproducible train-only audit over all 18,000 development rows. The
+artifact binds its summaries to the config, split row IDs, tokenizer revision,
+and ordered per-row token lengths, while recording that publisher test was not
+loaded.
 
 ## QLoRA setup
 
@@ -99,10 +103,13 @@ Every reported number is recomputable from raw logits stored next to it, and
 logits down to per-class precision/recall/F1 and every calibration bin, logits
 are checked against their SHA-256, and the selected epoch is re-derived from the
 rule rather than trusted. Epoch checkpoints are checked against their exact
-directory manifests. For the distributed selected adapter, every recorded
-configuration and weight file remains hash-checked while its Hugging Face
-`README.md` is treated as mutable distribution metadata; generating a model
-card therefore cannot invalidate or weaken the executable payload chain.
+directory manifests. For a distributed selected adapter, every recorded
+configuration and weight file remains hash-checked even if its Hugging Face
+`README.md` changes as distribution metadata. Locally generated model cards are
+written under `outputs/`, outside the adapter payload.
+The CLI loads each required pinned publisher split once and shares its ordered
+validation and test labels across every verifier stage, so a full reports-only
+check does not repeatedly reopen the same held-out data.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
@@ -126,6 +133,9 @@ pins the selected adapter, its hashes, the validation metrics, and the two
 validation-fitted temperatures. The final command refuses to run unless that
 file exists, refuses if the adapter's hash has changed since, refuses without an
 explicit confirmation string, and refuses to overwrite an existing final report.
+It also revalidates the experiment config at the entry point: the test budget
+must be the JSON integer `1` (not boolean `true`), and `resume_eligible` must
+remain `false` until the separate explanation gate passes.
 
 Both systems are scored from the same loaded model — adapter disabled for the
 base, enabled for the tuned — so the prompt, tokenizer, and quantization are

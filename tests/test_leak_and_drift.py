@@ -213,3 +213,79 @@ def test_an_ablation_that_forgot_to_change_anything_is_refused() -> None:
     )
     with pytest.raises(EvidenceError, match="did not actually change"):
         require_controlled(comparison)
+
+
+def test_the_comparison_reads_the_selected_epoch_not_the_best_one() -> None:
+    """Under the tie-break the selected epoch can differ from argmax."""
+    from loraforge.compare import compare_runs
+
+    tie_broken = report(STACK, 4, 0.9295)
+    tie_broken["epochs"] = [
+        {"epoch": 1, "validation": {"macro_f1": 0.9295}},
+        {"epoch": 2, "validation": {"macro_f1": 0.9295}},
+    ]
+    tie_broken["selection"] = {"selected_epoch": 1}
+
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        tie_broken,
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+    assert comparison["validation_macro_f1"]["variant"] == pytest.approx(0.9295)
+    assert comparison["selected_epoch"]["variant"] == 1
+
+
+def test_a_report_selecting_an_epoch_it_does_not_contain_is_refused() -> None:
+    from loraforge.compare import compare_runs
+
+    broken = report(STACK, 4, 0.9295)
+    broken["selection"] = {"selected_epoch": 7}
+    with pytest.raises(EvidenceError, match="not among its epochs"):
+        compare_runs(report(STACK, 16, 0.9310), broken)
+
+
+def test_the_same_article_in_two_splits_is_caught_despite_namespaced_row_ids() -> None:
+    """row_id mixes in the split name, so cross-split duplicates need content identity."""
+    train = Split(
+        "train",
+        (Example(row_id="train-0", text="Sprint  buys Nextel", label=3, source_index=0),),
+    )
+    test = Split(
+        "test",
+        (Example(row_id="test-0", text="Sprint buys  Nextel", label=3, source_index=0),),
+    )
+    assert train.examples[0].row_id != test.examples[0].row_id
+    with pytest.raises(SplitLeakError, match="identical model-visible article text"):
+        assert_disjoint(train, test)
+
+
+def test_different_articles_across_splits_are_not_flagged() -> None:
+    train = Split("train", (Example(row_id="a", text="one story", label=0, source_index=0),))
+    test = Split("test", (Example(row_id="b", text="another story", label=0, source_index=0),))
+    assert_disjoint(train, test)
+
+
+def test_describe_reports_the_real_corpus_size_not_a_hardcoded_one() -> None:
+    """The unused-rows figure goes into an evidence artifact, so it must be derived."""
+    from loraforge.config import DataConfig
+    from loraforge.data import DatasetBundle, describe
+
+    train, validation = split("train", range(0, 40)), split("validation", range(40, 50))
+    config = DataConfig(train_per_class=10, validation_per_class=3)
+
+    measured = describe(DatasetBundle(train, validation, publisher_train_rows=200), config)
+    assert measured["publisher_train_rows"] == 200
+    assert measured["selection"]["unused_publisher_train_rows"] == 200 - 40 - 10
+
+    unknown = describe(DatasetBundle(train, validation), config)
+    assert unknown["publisher_train_rows"] is None
+    assert unknown["selection"]["unused_publisher_train_rows"] is None
+
+
+def test_hashing_an_empty_sequence_is_refused() -> None:
+    """The empty-string digest would compare equal to any other empty sequence."""
+    from loraforge.provenance import EvidenceError, sha256_labels
+
+    assert sha256_labels([0, 1]) != sha256_labels([1, 0])
+    with pytest.raises(EvidenceError, match="empty label sequence"):
+        sha256_labels([])

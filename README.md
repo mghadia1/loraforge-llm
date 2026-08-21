@@ -91,6 +91,9 @@ refuses that config. It has no result yet and must not change or replace the
 verified experiment above. Prepare it in a separate ignored run directory:
 
 ```bash
+python -m pip install -e '.[dev,audit]'
+loraforge token-audit --config configs/experiment-expanded-data.json \
+  --output docs/evidence/expanded-data-token-length-audit.json --check
 mkdir -p runs/expanded-data/outputs
 cp outputs/base-validation.json runs/expanded-data/outputs/
 loraforge data-stats --config configs/experiment-expanded-data.json \
@@ -99,6 +102,10 @@ loraforge train --config configs/experiment-expanded-data.json \
   --root runs/expanded-data
 loraforge freeze-selection --root runs/expanded-data
 ```
+
+The tracked token audit covers all 18,000 expanded-development rows using the
+pinned tokenizer and records both split row-ID hashes and per-row token-length
+hashes. It loads publisher train only; `test_loaded` must remain false.
 
 The existing base-validation artifact is reusable because the validation row
 IDs are deliberately unchanged. Training still requires a suitable CUDA GPU;

@@ -135,6 +135,20 @@ def test_ece_zero_when_confidence_matches_accuracy() -> None:
 
 def test_temperature_scaling_does_not_change_argmax() -> None:
     rng = np.random.default_rng(4)
-    logits = rng.normal(size=(100, 4))
-    temperature = fit_temperature(logits, rng.integers(0, 4, 100).tolist())
+    labels = rng.integers(0, 4, 200).tolist()
+    # Logits must carry signal about the labels, or the NLL-minimizing temperature
+    # is unbounded: flattening a random predictor forever keeps improving its NLL.
+    logits = rng.normal(scale=1.5, size=(200, 4))
+    logits[np.arange(200), np.asarray(labels)] += 3.0
+    temperature = fit_temperature(logits, labels)
+    assert 0.05 < temperature < 10.0
     assert np.array_equal(softmax(logits).argmax(1), softmax(logits / temperature).argmax(1))
+
+
+def test_a_temperature_search_that_hits_its_own_wall_is_refused() -> None:
+    """Returning the boundary would report a failed search as a fitted value."""
+    rng = np.random.default_rng(4)
+    labels = rng.integers(0, 4, 200).tolist()
+    uninformative = rng.normal(scale=200.0, size=(200, 4))  # optimum far above the ceiling
+    with pytest.raises(ValueError, match="converged to its boundary"):
+        fit_temperature(uninformative, labels)

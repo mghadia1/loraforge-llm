@@ -49,8 +49,13 @@ def _selected_macro_f1(report: dict[str, Any], name: str) -> float:
     selection = report.get("selection")
     if not isinstance(epochs, list) or not isinstance(selection, dict):
         raise EvidenceError(f"{name} report has no checkpoint selection evidence")
+    declared_epoch = selection.get("selected_epoch")
+    if declared_epoch not in [entry.get("epoch") for entry in epochs if isinstance(entry, dict)]:
+        raise EvidenceError(
+            f"{name} report selects epoch {declared_epoch}, which is not among its epochs"
+        )
     selected = select_checkpoint(epochs)
-    if selection.get("selected_epoch") != selected.get("epoch"):
+    if declared_epoch != selected.get("epoch"):
         raise EvidenceError(f"{name} report selected epoch does not follow the selection rule")
     try:
         value = float(selected["validation"]["macro_f1"])
@@ -115,6 +120,10 @@ def compare_runs(
         "gpu_matches": gpu_matches,
         "validation_label_sha256": validation_hashes,
         "validation_data_matches": validation_data_matches,
+        "selected_epoch": {
+            "baseline": baseline["selection"]["selected_epoch"],
+            "variant": variant["selection"]["selected_epoch"],
+        },
         "validation_macro_f1": {
             "baseline": baseline_best,
             "variant": variant_best,

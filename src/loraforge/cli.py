@@ -23,6 +23,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", type=Path, default=Path("docs/evidence/formatted-examples.json")
     )
     examples.add_argument("--config", type=Path, help="validated experiment JSON")
+    token_audit = commands.add_parser(
+        "token-audit",
+        help="audit train/validation token lengths without loading publisher test",
+    )
+    token_audit.add_argument("--config", type=Path, help="validated experiment JSON")
+    token_audit.add_argument(
+        "--output", type=Path, default=Path("docs/evidence/token-length-audit.json")
+    )
+    token_audit.add_argument(
+        "--check",
+        action="store_true",
+        help="recompute and verify the existing output instead of overwriting it",
+    )
 
     train = commands.add_parser("train", help="run configured QLoRA training (needs a GPU)")
     train.add_argument("--root", type=Path, default=Path("."))
@@ -171,16 +184,38 @@ def main() -> int:
         return 0
 
     if args.command == "verify":
+        from .config import DataConfig
         from .final_test import verify_final_report
         from .intervals import INTERVALS_REPORT, verify_intervals
         from .provenance import read_json
         from .selection import TRAINING_REPORT, verify_training_report
 
         checked = {}
-        if (Path(args.root) / TRAINING_REPORT).exists():
+        root = Path(args.root)
+        training_path = root / TRAINING_REPORT
+        final_path = root / "outputs/final-test-report.json"
+        intervals_path = root / INTERVALS_REPORT
+        if not any(path.exists() for path in (training_path, final_path, intervals_path)):
+            raise SystemExit("nothing to verify: no training or final-test report exists yet")
+
+        # Dataset loading validates split size, ontology, leakage, and the ordered
+        # labels. Do that once for the whole verification chain: reloading at each
+        # stage used to request the same pinned cache up to six times.
+        training_report = read_json(training_path)
+        needs_test = final_path.exists() or intervals_path.exists()
+        bundle = load_dataset(
+            allow_test=needs_test,
+            config=DataConfig(**training_report["config"]["data"]),
+        )
+        validation_labels = bundle.validation.labels
+        test = bundle.require_test() if needs_test else None
+        test_labels = test.labels if test is not None else None
+
+        if training_path.exists():
             selected = verify_training_report(
-                read_json(Path(args.root) / TRAINING_REPORT),
-                root=args.root,
+                training_report,
+                root=root,
+                labels=validation_labels,
                 verify_adapters=not args.reports_only,
             )
             checked["training_report"] = {
@@ -188,16 +223,51 @@ def main() -> int:
                 "selected_epoch": selected["epoch"],
                 "adapter_files_verified": not args.reports_only,
             }
-        if (Path(args.root) / "outputs/final-test-report.json").exists():
-            checked["final_test_report"] = verify_final_report(root=args.root)
-        if (Path(args.root) / INTERVALS_REPORT).exists():
-            checked["test_intervals"] = verify_intervals(root=args.root)
-        if not checked:
-            raise SystemExit("nothing to verify: no training or final-test report exists yet")
+        if final_path.exists():
+            checked["final_test_report"] = verify_final_report(
+                root=root,
+                validation_labels=validation_labels,
+                test_split=test,
+            )
+        if intervals_path.exists():
+            checked["test_intervals"] = verify_intervals(root=root, labels=test_labels)
         print(json.dumps(checked, indent=2))
         return 0
 
     bundle = load_dataset(allow_test=False, config=config.data)
+    if args.command == "token-audit":
+        from transformers import AutoTokenizer
+
+        from .provenance import EvidenceError, read_json, write_json
+        from .token_audit import build_token_length_audit, verify_token_length_audit
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model_name,
+            revision=config.model_revision,
+        )
+        if args.check:
+            audit = verify_token_length_audit(
+                read_json(args.output), tokenizer, bundle, config
+            )
+        else:
+            audit = build_token_length_audit(tokenizer, bundle, config)
+            write_json(audit, args.output)
+            if not audit["safe_to_train_without_truncation"]:
+                raise EvidenceError(
+                    f"{audit['rows_over_max_sequence_length']} development rows exceed "
+                    f"max_sequence_length={config.training.max_sequence_length}; "
+                    f"failure evidence was written to {args.output}"
+                )
+        print(json.dumps({
+            "output": str(args.output),
+            "verified": args.check,
+            "development_rows": audit["development_rows"],
+            "rows_over_max_sequence_length": audit["rows_over_max_sequence_length"],
+            "safe_to_train_without_truncation": audit["safe_to_train_without_truncation"],
+            "test_loaded": audit["test_loaded"],
+        }))
+        return 0
+
     if args.command == "data-stats":
         write_stats(bundle, config.data, args.output)
         print(json.dumps(describe(bundle, config.data)))

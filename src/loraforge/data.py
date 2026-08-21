@@ -72,6 +72,11 @@ class DatasetBundle:
     train: Split
     validation: Split
     test: Split | None = None
+    # Size of the publisher split the development rows were drawn from. Recorded
+    # rather than assumed: describe() used to subtract from a hardcoded 120,000,
+    # which fabricates an "unused rows" figure for any other corpus and writes it
+    # into an evidence artifact.
+    publisher_train_rows: int | None = None
 
     def require_test(self) -> Split:
         if self.test is None:
@@ -174,13 +179,20 @@ def deterministic_development_split(
 
 
 def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
-    """Refuse model-visible content overlap across provenance namespaces."""
-    shared = {_content_id(item.text) for item in trained_on.examples} & {
+    """Refuse any overlap between rows trained on and rows used to judge training."""
+    shared_rows = {item.row_id for item in trained_on.examples} & {
+        item.row_id for item in judged_on.examples
+    }
+    shared_content = {_content_id(item.text) for item in trained_on.examples} & {
         _content_id(item.text) for item in judged_on.examples
     }
+    shared = shared_rows or shared_content
     if shared:
+        kind = (
+            "also appear in" if shared_rows else "share identical model-visible article text with"
+        )
         raise SplitLeakError(
-            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows also appear in "
+            f"{len(shared)} of {len(judged_on)} {judged_on.name} rows {kind} "
             f"{trained_on.name}; selection would be scored on trained-on data"
         )
 
@@ -213,7 +225,12 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
         if test_names != CLASS_NAMES:
             raise ValueError(f"upstream test class names changed: {test_names}")
         test = Split("test", tuple(_to_examples("test", publisher_test)))
-    bundle = DatasetBundle(train=train, validation=validation, test=test)
+    bundle = DatasetBundle(
+        train=train,
+        validation=validation,
+        test=test,
+        publisher_train_rows=len(publisher_train),
+    )
     assert_no_leaks(bundle)
     return bundle
 
@@ -233,7 +250,11 @@ def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
     selection = {
         "seed": config.seed,
         "algorithm": "per-class SHA-256 ordering; fixed counts; row-ID sort",
-        "unused_publisher_train_rows": 120_000 - len(bundle.train) - len(bundle.validation),
+        "unused_publisher_train_rows": (
+            None
+            if bundle.publisher_train_rows is None
+            else bundle.publisher_train_rows - len(bundle.train) - len(bundle.validation)
+        ),
     }
     if config.validation_start_per_class is not None:
         selection.update(
@@ -249,7 +270,7 @@ def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
         "schema_version": 1,
         "dataset": config.dataset_name,
         "dataset_revision": config.dataset_revision,
-        "publisher_train_rows": 120_000,
+        "publisher_train_rows": bundle.publisher_train_rows,
         "publisher_test_rows": config.publisher_test_rows,
         "selection": selection,
         "classes": list(CLASS_NAMES),

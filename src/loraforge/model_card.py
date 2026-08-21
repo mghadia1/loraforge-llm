@@ -255,10 +255,22 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     return card
 
 
+CARD_PATH = Path("outputs/model-card.md")
+
+
 def write_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> Path:
+    """Write the card beside the run's other artifacts, never inside the adapter.
+
+    The adapter directory's SHA-256 is the anchor of the whole evidence chain: it
+    is recorded at training time, again in the frozen selection, and again in the
+    release manifest. Adding a file to that directory silently invalidates all
+    three, and an earlier version of this function did exactly that. Publishing to
+    the Hub still wants the card as the repo's README, but copying it in is a
+    deliberate act that ends the local hash's validity, not a side effect of
+    generating documentation.
+    """
     root = Path(root)
-    report = read_json(root / "outputs/training-report.json")
-    target = root / report["selection"]["selected_adapter_dir"] / "README.md"
+    target = root / CARD_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(build_model_card(root=root, repo_url=repo_url), encoding="utf-8")
     return target

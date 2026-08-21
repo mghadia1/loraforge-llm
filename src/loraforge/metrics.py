@@ -107,6 +107,15 @@ def fit_temperature(
     high: float = 10.0,
     tolerance: float = 1e-4,
 ) -> float:
+    """Golden-section search for the NLL-minimizing temperature.
+
+    Raises if the minimum lies outside the search range. Returning the boundary
+    silently would report a wall as a fitted value: a model whose true optimum is
+    far above `high` would be handed a temperature that leaves it badly
+    miscalibrated, and every ECE derived from it would be wrong without any signal
+    that the fit failed.
+    """
+    search_low, search_high = low, high
     inverse_phi = (np.sqrt(5.0) - 1.0) / 2.0
     c = high - inverse_phi * (high - low)
     d = low + inverse_phi * (high - low)
@@ -119,7 +128,17 @@ def fit_temperature(
             low = c
         c = high - inverse_phi * (high - low)
         d = low + inverse_phi * (high - low)
-    return float((low + high) / 2.0)
+    fitted = float((low + high) / 2.0)
+
+    margin = 10 * tolerance
+    if fitted <= search_low + margin or fitted >= search_high - margin:
+        raise ValueError(
+            f"temperature search converged to its boundary ({fitted:.4f} in "
+            f"[{search_low}, {search_high}]); the optimum lies outside the range, so "
+            "this is not a fitted temperature. Widen the range deliberately and "
+            "record that the range changed."
+        )
+    return fitted
 
 
 def evaluation_block(
