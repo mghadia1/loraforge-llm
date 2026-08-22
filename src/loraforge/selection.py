@@ -13,6 +13,7 @@ from .provenance import (
     EvidenceError,
     load_logits,
     read_json,
+    resolve_adapter_directory,
     utc_now,
     verify_directory_snapshot,
     write_json,
@@ -96,12 +97,18 @@ def verify_training_report(
     for entry in report["epochs"]:
         logits = load_logits(entry["validation_logits"], root=root)
         recompute_block(logits, labels, entry["validation"], f"epoch-{entry['epoch']}")
+        try:
+            adapter_dir = resolve_adapter_directory(root, entry["adapter_dir"])
+        except EvidenceError as error:
+            raise EvidenceError(
+                f"epoch-{entry['epoch']} adapter files changed since training: {error}"
+            ) from error
         if verify_adapters:
             try:
-                verify_directory_snapshot(root / entry["adapter_dir"], entry["adapter_hashes"])
+                verify_directory_snapshot(adapter_dir, entry["adapter_hashes"])
             except EvidenceError as error:
                 raise EvidenceError(
-                    f"epoch-{entry['epoch']} adapter files changed since training"
+                    f"epoch-{entry['epoch']} adapter files changed since training: {error}"
                 ) from error
 
         records.append(entry)
@@ -114,8 +121,15 @@ def verify_training_report(
         )
     if report["selection"]["selected_adapter_hashes"] != selected["adapter_hashes"]:
         raise EvidenceError("selected adapter hashes do not match the selected epoch")
+    try:
+        selected_dir = resolve_adapter_directory(
+            root, report["selection"]["selected_adapter_dir"]
+        )
+    except EvidenceError as error:
+        raise EvidenceError(
+            f"adapters/selected does not match the selected epoch checkpoint: {error}"
+        ) from error
     if verify_adapters:
-        selected_dir = root / report["selection"]["selected_adapter_dir"]
         try:
             verify_directory_snapshot(
                 selected_dir,
@@ -124,7 +138,8 @@ def verify_training_report(
             )
         except EvidenceError as error:
             raise EvidenceError(
-                "adapters/selected does not match the selected epoch checkpoint"
+                "adapters/selected does not match the selected epoch checkpoint: "
+                f"{error}"
             ) from error
     return selected
 
@@ -268,7 +283,7 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
     """Load the gate file and refuse to continue unless the adapter still matches it."""
     root = Path(root)
     frozen = read_json(root / FROZEN_SELECTION)
-    adapter_dir = root / frozen["selected_adapter_dir"]
+    adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
     if not adapter_dir.is_dir():
         raise EvidenceError(f"selected adapter {adapter_dir} is missing")
     try:
