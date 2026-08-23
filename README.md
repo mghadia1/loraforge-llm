@@ -77,6 +77,13 @@ The selected adapter's executable payload (configuration and weights) remains
 strictly hash-checked; its Hugging Face `README.md` is mutable distribution
 metadata and is deliberately excluded from that payload comparison.
 
+To verify the complete training/validation chain and local adapter manifests
+without loading publisher test, even after final-test artifacts exist, run:
+
+```bash
+PYTHONPATH=src python -m loraforge.cli verify --root . --training-only
+```
+
 ## Expanded-data follow-up (validation only)
 
 [`configs/experiment-expanded-data.json`](configs/experiment-expanded-data.json)

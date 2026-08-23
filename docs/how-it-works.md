@@ -116,6 +116,10 @@ written under `outputs/`, outside the adapter payload.
 The CLI loads each required pinned publisher split once and shares its ordered
 validation and test labels across every verifier stage, so a full reports-only
 check does not repeatedly reopen the same held-out data.
+An explicit `verify --training-only` scope ignores existing final-test and
+interval artifacts, loads publisher train only, and verifies the validation
+metrics, checkpoint selection, and adapter manifests without requesting the
+publisher test split.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model

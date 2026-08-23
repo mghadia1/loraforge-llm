@@ -98,6 +98,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="verify reports/logits without requiring local adapter checkpoint files",
     )
+    verify.add_argument(
+        "--training-only",
+        action="store_true",
+        help=(
+            "verify training/validation evidence only and never load publisher test, "
+            "even when final-test artifacts exist"
+        ),
+    )
     return parser
 
 
@@ -195,14 +203,21 @@ def main() -> int:
         training_path = root / TRAINING_REPORT
         final_path = root / "outputs/final-test-report.json"
         intervals_path = root / INTERVALS_REPORT
-        if not any(path.exists() for path in (training_path, final_path, intervals_path)):
+        verification_paths = (
+            (training_path,)
+            if args.training_only
+            else (training_path, final_path, intervals_path)
+        )
+        if not any(path.exists() for path in verification_paths):
             raise SystemExit("nothing to verify: no training or final-test report exists yet")
 
         # Dataset loading validates split size, ontology, leakage, and the ordered
         # labels. Do that once for the whole verification chain: reloading at each
         # stage used to request the same pinned cache up to six times.
         training_report = read_json(training_path)
-        needs_test = final_path.exists() or intervals_path.exists()
+        needs_test = not args.training_only and (
+            final_path.exists() or intervals_path.exists()
+        )
         bundle = load_dataset(
             allow_test=needs_test,
             config=DataConfig(**training_report["config"]["data"]),
@@ -223,13 +238,13 @@ def main() -> int:
                 "selected_epoch": selected["epoch"],
                 "adapter_files_verified": not args.reports_only,
             }
-        if final_path.exists():
+        if final_path.exists() and not args.training_only:
             checked["final_test_report"] = verify_final_report(
                 root=root,
                 validation_labels=validation_labels,
                 test_split=test,
             )
-        if intervals_path.exists():
+        if intervals_path.exists() and not args.training_only:
             checked["test_intervals"] = verify_intervals(root=root, labels=test_labels)
         print(json.dumps(checked, indent=2))
         return 0

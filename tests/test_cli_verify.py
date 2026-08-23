@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
+
 from loraforge import cli
 from loraforge.data import DatasetBundle, Example, Split
 from loraforge.intervals import INTERVALS_REPORT
@@ -76,7 +78,7 @@ def test_verify_loads_the_pinned_dataset_once_for_every_report(
 def test_training_only_verification_keeps_the_test_split_locked(
     tmp_path, monkeypatch, capsys
 ) -> None:
-    write_report_markers(tmp_path, with_test=False)
+    write_report_markers(tmp_path, with_test=True)
     bundle = DatasetBundle(
         train=one_row_split("train", 0),
         validation=one_row_split("validation", 1),
@@ -93,9 +95,26 @@ def test_training_only_verification_keeps_the_test_split_locked(
         lambda report, *, root, labels, verify_adapters: {"epoch": 1},
     )
     monkeypatch.setattr(
-        sys, "argv", ["loraforge", "verify", "--root", str(tmp_path), "--reports-only"]
+        "loraforge.final_test.verify_final_report",
+        lambda **kwargs: pytest.fail("training-only verification reached final evidence"),
+    )
+    monkeypatch.setattr(
+        "loraforge.intervals.verify_intervals",
+        lambda **kwargs: pytest.fail("training-only verification reached test intervals"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["loraforge", "verify", "--root", str(tmp_path), "--training-only"],
     )
 
     assert cli.main() == 0
-    capsys.readouterr()
+    output = json.loads(capsys.readouterr().out)
     assert allowed == [False]
+    assert output == {
+        "training_report": {
+            "verified": True,
+            "selected_epoch": 1,
+            "adapter_files_verified": True,
+        }
+    }
