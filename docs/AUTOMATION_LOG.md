@@ -10,3 +10,4 @@
 - 2026-08-21 15:42 MST — Hardened logit references to reject false shapes, absolute/out-of-root paths, and non-`.npy` targets; 162 tests plus reports-only and strict rank-16 evidence verification passed.
 - 2026-08-21 15:48 MST — Made four-class metric and calibration inputs fail closed on zero/invalid ECE bins, malformed probabilities/logits/labels, and invalid temperature-search bounds while preserving float32 evidence semantics; 175 tests plus reports-only and strict verification passed.
 - 2026-08-21 16:01 MST — Removed unsupported TF-IDF score/runtime and quantified error-analysis claims from generated model cards; limitations now fail honestly to the evidence actually recorded by a run.
+- 2026-08-24 09:00 MST — Made final-report verification fail closed on boolean evaluation counts, an unconsumed frozen test gate, mismatched consumption timestamps, and every tampered delta field.
