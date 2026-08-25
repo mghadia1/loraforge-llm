@@ -68,6 +68,70 @@ def test_boolean_schema_version_is_not_version_one(tmp_path) -> None:
         load_config(path)
 
 
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("data", "seed"), True),
+        (("data", "publisher_test_rows"), 7_600.0),
+        (("quantization", "use_double_quant"), 1),
+        (("lora", "rank"), True),
+        (("lora", "dropout"), "0.05"),
+        (("lora", "dropout"), float("nan")),
+        (("lora", "target_modules"), "q_proj"),
+        (("training", "epochs"), True),
+        (("training", "learning_rate"), "0.0002"),
+        (("training", "learning_rate"), 10**400),
+        (("training", "per_device_train_batch_size"), 2.0),
+        (("training", "gradient_checkpointing"), 1),
+    ],
+)
+def test_nested_config_fields_keep_their_declared_types(
+    tmp_path, path, replacement
+) -> None:
+    config_path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    section, field = path
+    payload[section][field] = replacement
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=rf"{section}\.{field}"):
+        load_config(config_path)
+
+
+def test_missing_fields_are_not_silently_filled_from_dataclass_defaults(tmp_path) -> None:
+    path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    del payload["training"]["learning_rate"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"missing=\['learning_rate'\]"):
+        load_config(path)
+
+
+def test_unexpected_fields_are_rejected_instead_of_becoming_untracked_protocol(tmp_path) -> None:
+    path = tmp_path / "experiment.json"
+    payload = default_config().to_dict()
+    payload["training"]["scheduler"] = "cosine"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"unexpected=\['scheduler'\]"):
+        load_config(path)
+
+
+def test_config_root_and_sections_must_be_json_objects(tmp_path) -> None:
+    root_path = tmp_path / "root.json"
+    root_path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="experiment config must be a JSON object"):
+        load_config(root_path)
+
+    section_path = tmp_path / "section.json"
+    payload = default_config().to_dict()
+    payload["training"] = []
+    section_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="training must be a JSON object"):
+        load_config(section_path)
+
+
 def test_development_split_is_balanced_disjoint_and_deterministic() -> None:
     config = DataConfig(train_per_class=4, validation_per_class=2)
     first_train, first_validation = deterministic_development_split(

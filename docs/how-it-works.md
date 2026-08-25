@@ -62,6 +62,11 @@ Its weights stay frozen. PEFT adds rank-16 `A` and `B` matrices to attention and
 MLP projection layers. The audit recomputes trainable and total parameters and
 raises if any trainable parameter name is not a LoRA adapter.
 
+Experiment JSON is parsed as an exact typed schema before any model or dataset
+work starts. Missing and unexpected fields are rejected instead of inheriting
+silent dataclass defaults, JSON booleans cannot stand in for integer counts,
+and every nested object and target-module array keeps its declared shape.
+
 The completed run used a Tesla T4. The phase-one setup reached 12.34 GiB peak
 CUDA allocation; the training report records 5.77 GiB peak after its own memory
 reset. The selected adapter contains 41,943,040 trainable LoRA weights and is
