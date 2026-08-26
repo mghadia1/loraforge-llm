@@ -13,3 +13,4 @@
 - 2026-08-22 09:05 MST — Confined epoch, selected, and frozen adapter-directory references (including symlinks) to canonical paths under the evidence root; 179 tests and the real strict adapter-manifest check passed without loading publisher test, while the full verifier was blocked from reopening that split.
 - 2026-08-23 09:00 MST — Added an explicit training-only verifier scope that checks validation evidence and adapter manifests while keeping publisher test locked even when completed final-test artifacts exist.
 - 2026-08-24 09:00 MST — Made final-report verification fail closed on boolean evaluation counts, an unconsumed frozen test gate, mismatched consumption timestamps, and every tampered delta field.
+- 2026-08-25 09:09 MST — Made experiment-config loading enforce the complete typed JSON schema, rejecting silent defaults, unknown fields, boolean-as-integer values, and malformed nested arrays before model or dataset work.
