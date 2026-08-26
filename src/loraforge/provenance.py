@@ -182,6 +182,30 @@ def _resolve_logit_path(root: Path, relative_path: str) -> Path:
     return target
 
 
+def resolve_adapter_directory(root: Path, relative_path: str) -> Path:
+    """Resolve an adapter directory without allowing evidence to escape ``root``."""
+    if not isinstance(relative_path, str) or not relative_path:
+        raise EvidenceError(
+            "adapter directory must be a nonempty repo-relative string"
+        )
+    candidate = Path(relative_path)
+    if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
+        raise EvidenceError(
+            "adapter directory must stay repo-relative under its evidence root: "
+            f"{relative_path!r}"
+        )
+
+    resolved_root = Path(root).resolve()
+    target = (resolved_root / candidate).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as error:
+        raise EvidenceError(
+            f"adapter directory escapes its evidence root: {relative_path!r}"
+        ) from error
+    return target
+
+
 def save_logits(array: np.ndarray, root: Path, relative_path: str) -> dict[str, Any]:
     """Write logits under ``root`` but record the repo-relative path, so evidence relocates."""
     target = _resolve_logit_path(root, relative_path)

@@ -16,6 +16,7 @@ from .provenance import (
     environment,
     load_logits,
     read_json,
+    resolve_adapter_directory,
     save_logits,
     sha256_array,
     sha256_labels,
@@ -83,7 +84,8 @@ def run_final_test(
     frozen = require_frozen_selection(root=root)
 
     base_model, tokenizer = load_quantized_base(config)
-    model = attach_saved_adapter(base_model, root / frozen["selected_adapter_dir"])
+    adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
+    model = attach_saved_adapter(base_model, adapter_dir)
     bundle = load_dataset(allow_test=True, config=config.data)
     test = bundle.require_test()
     if len(test) != config.data.publisher_test_rows:
