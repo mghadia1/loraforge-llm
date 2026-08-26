@@ -23,6 +23,7 @@ from .provenance import (
 METRIC_TOLERANCE = 1e-9
 TRAINING_REPORT = Path("outputs/training-report.json")
 FROZEN_SELECTION = Path("outputs/frozen-selection.json")
+SELECTION_RULE = "max validation macro_f1; exact tie resolved to the earlier epoch"
 
 
 def _assert_close(name: str, recorded: float, recomputed: float) -> None:
@@ -79,6 +80,56 @@ def recompute_block(logits: np.ndarray, labels: list[int], recorded: dict[str, A
     _assert_metric_tree(name, recorded, fresh)
 
 
+def training_report_config(report: dict[str, Any]):
+    """Parse the embedded config with the same strict schema used before training."""
+    from .config import config_from_dict
+
+    if not isinstance(report, dict):
+        raise EvidenceError("training report must be a JSON object")
+    try:
+        return config_from_dict(report.get("config"))
+    except (TypeError, ValueError) as error:
+        raise EvidenceError(
+            f"training report config does not match the typed experiment schema: {error}"
+        ) from error
+
+
+def _verify_training_protocol(report: dict[str, Any]):
+    """Bind copied training-report provenance and counts to its validated config."""
+    from .data import CLASS_NAMES
+
+    config = training_report_config(report)
+    expected = {
+        "schema_version": 1,
+        "model": config.model_name,
+        "model_revision": config.model_revision,
+        "test_evaluated": False,
+        "train_rows": len(CLASS_NAMES) * config.data.train_per_class,
+        "validation_rows": len(CLASS_NAMES) * config.data.validation_per_class,
+    }
+    for field, value in expected.items():
+        recorded = report.get(field)
+        if type(recorded) is not type(value) or recorded != value:
+            raise EvidenceError(
+                f"training report {field} does not match its validated experiment config"
+            )
+
+    epochs = report.get("epochs")
+    expected_epochs = list(range(1, config.training.epochs + 1))
+    if not isinstance(epochs, list) or any(not isinstance(item, dict) for item in epochs):
+        raise EvidenceError("training report epochs must be a list of checkpoint objects")
+    recorded_epochs = [item.get("epoch") for item in epochs]
+    if any(type(epoch) is not int for epoch in recorded_epochs) or recorded_epochs != expected_epochs:
+        raise EvidenceError(
+            "training report epoch sequence does not match config.training.epochs"
+        )
+
+    selection = report.get("selection")
+    if not isinstance(selection, dict) or selection.get("rule") != SELECTION_RULE:
+        raise EvidenceError("training report selection rule does not match the frozen protocol")
+    return config
+
+
 def verify_training_report(
     report: dict[str, Any],
     *,
@@ -89,7 +140,8 @@ def verify_training_report(
     """Re-derive selection and every validation metric from the saved logits."""
     from .training import select_checkpoint
 
-    labels = _validation_labels(report, root, labels)
+    config = _verify_training_protocol(report)
+    labels = _validation_labels(report, root, labels, config=config)
     base_logits = load_logits(report["base_validation_logits"], root=root)
     recompute_block(base_logits, labels, report["base_validation_metrics"], "base_validation")
 
@@ -145,16 +197,24 @@ def verify_training_report(
 
 
 def _validation_labels(
-    report: dict[str, Any], root: Path, labels: list[int] | None = None
+    report: dict[str, Any],
+    root: Path,
+    labels: list[int] | None = None,
+    *,
+    config=None,
 ) -> list[int]:
     """Use the pinned validation labels, reloading them unless a caller supplies them."""
-    from .config import DataConfig
     from .data import load_dataset
     from .provenance import sha256_labels
 
+    config = config or _verify_training_protocol(report)
     if labels is None:
-        bundle = load_dataset(allow_test=False, config=DataConfig(**report["config"]["data"]))
+        bundle = load_dataset(allow_test=False, config=config.data)
         labels = bundle.validation.labels
+    if len(labels) != report["validation_rows"]:
+        raise EvidenceError(
+            "validation label count does not match the training report and experiment config"
+        )
     if sha256_labels(labels) != report["validation_label_sha256"]:
         raise EvidenceError("validation labels no longer match the training report")
     return labels

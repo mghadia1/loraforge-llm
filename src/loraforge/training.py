@@ -24,6 +24,7 @@ from .provenance import (
     write_json,
 )
 from .qlora import parameter_report
+from .selection import SELECTION_RULE
 
 
 # Loose enough to survive a few rows flipping on non-deterministic 4-bit kernels
@@ -285,7 +286,7 @@ def train_qlora(
             for record in recorder.records
         ],
         "selection": {
-            "rule": "max validation macro_f1; exact tie resolved to the earlier epoch",
+            "rule": SELECTION_RULE,
             "selected_epoch": selected["epoch"],
             "selected_adapter_dir": selected_relative,
             "selected_adapter_hashes": sha256_directory(selected_dir),

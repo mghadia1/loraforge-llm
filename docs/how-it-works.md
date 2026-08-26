@@ -113,8 +113,11 @@ both their recorded array shape and SHA-256. Adapter directory references are
 also required to be repo-relative, and their canonical paths — including any
 directory symlinks — must remain under the evidence root before reports-only
 verification, strict hashing, or model loading. The selected epoch is re-derived
-from the rule rather than trusted. Epoch checkpoints are checked against their
-exact directory manifests. For a distributed selected adapter, every recorded
+from the rule rather than trusted. The training report's embedded experiment
+config is parsed through the complete typed schema before dataset loading, and
+its model identity, development row counts, epoch sequence, test-lock state,
+and selection rule must agree with that config. Epoch checkpoints are checked
+against their exact directory manifests. For a distributed selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.
