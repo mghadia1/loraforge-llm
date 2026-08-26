@@ -126,9 +126,12 @@ used those validation-fitted values. It also requires the final report's model
 revision, selected epoch, complete adapter manifest, and experiment config to
 match the validated training and frozen-selection evidence. The publisher-test
 row count is always checked; when the verifier loads the pinned dataset, it also
-checks the ordered row-ID digest. Editing any stored metric, provenance field,
-or calibration temperature by hand makes verification fail — which is the
-point. The GPU-free tests include exactly those tamper cases.
+checks the ordered row-ID digest. The one-run counter must be an exact JSON
+integer, the frozen gate must record the same test-consumption timestamp as the
+final report, and every reported accuracy, macro-F1, and calibrated-ECE delta is
+re-derived from the two verified system blocks. Editing any stored metric,
+provenance field, delta, or calibration temperature by hand makes verification
+fail — which is the point. The GPU-free tests include exactly those tamper cases.
 
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the

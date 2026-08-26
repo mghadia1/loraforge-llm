@@ -11,6 +11,7 @@ from loraforge.config import default_config
 from loraforge.data import Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
+    DELTA_NOTE,
     _system_block,
     run_final_test,
     verify_final_report,
@@ -106,6 +107,7 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     tuned = _system_block(tuned_logits, LABELS, frozen["validation"]["tuned"]["temperature"], 3.2)
     report = {
         "schema_version": 1,
+        "created_at_utc": "2026-01-01T00:00:00Z",
         "test_evaluated": True,
         "test_evaluations_run": 1,
         "split": "publisher test",
@@ -125,10 +127,18 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
         },
         "delta": {
             "macro_f1": tuned["metrics_before_temperature"]["macro_f1"]
-            - base["metrics_before_temperature"]["macro_f1"]
+            - base["metrics_before_temperature"]["macro_f1"],
+            "accuracy": tuned["metrics_before_temperature"]["accuracy"]
+            - base["metrics_before_temperature"]["accuracy"],
+            "ece_after_temperature": tuned["metrics_after_temperature"]["calibration"]["ece"]
+            - base["metrics_after_temperature"]["calibration"]["ece"],
+            "note": DELTA_NOTE,
         },
     }
     write_json(report, root / "outputs" / "final-test-report.json")
+    frozen["test_evaluated"] = True
+    frozen["test_evaluated_at_utc"] = report["created_at_utc"]
+    write_json(frozen, root / "outputs" / "frozen-selection.json")
     return report
 
 
@@ -398,6 +408,47 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
     assert verified["macro_f1_delta"] > 0
 
 
+@pytest.mark.parametrize("replacement", [True, 1.0])
+def test_test_evaluation_count_must_be_an_exact_integer(tmp_path, replacement) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["test_evaluations_run"] = replacement
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="exactly one test evaluation"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+@pytest.mark.parametrize("replacement", [False, 1])
+def test_frozen_gate_must_record_consumed_test_budget(tmp_path, replacement) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["test_evaluated"] = replacement
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="test budget was consumed"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_frozen_test_timestamp_must_match_the_final_report(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["test_evaluated_at_utc"] = "2026-01-02T00:00:00Z"
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="test-consumption timestamp"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
 def test_preloaded_test_split_still_checks_ordered_row_ids(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
@@ -458,6 +509,8 @@ def test_final_report_temperature_must_match_the_validation_gate(tmp_path) -> No
 @pytest.mark.parametrize(
     ("path", "replacement", "message"),
     [
+        (("schema_version",), True, "schema_version"),
+        (("test_evaluated",), 1, "test_evaluated"),
         (("model",), "other/model", "model"),
         (("model_revision",), "0" * 40, "model_revision"),
         (("selected_epoch",), 1, "selected_epoch"),
@@ -512,15 +565,37 @@ def test_edited_calibration_bin_is_rejected(tmp_path) -> None:
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
-def test_inflated_delta_is_rejected(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("macro_f1", 0.5),
+        ("accuracy", 0.5),
+        ("ece_after_temperature", 0.5),
+        ("note", "QLoRA always helps"),
+    ],
+)
+def test_edited_delta_field_is_rejected(tmp_path, field, replacement) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
     make_final_report(tmp_path)
     path = tmp_path / "outputs" / "final-test-report.json"
     report = read_json(path)
-    report["delta"]["macro_f1"] = 0.5
+    report["delta"][field] = replacement
     write_json(report, path)
-    with pytest.raises(EvidenceError, match="delta does not match"):
+    with pytest.raises(EvidenceError, match=rf"delta\.{field}"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_unexpected_delta_field_is_rejected(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["delta"]["unsupported_claim"] = 1.0
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="delta fields"):
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
