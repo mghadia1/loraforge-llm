@@ -109,7 +109,10 @@ Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
 logits down to per-class precision/recall/F1 and every calibration bin, logits
 are confined to repo-relative paths under the evidence root and checked against
-both their recorded array shape and SHA-256. The selected epoch is re-derived
+both their recorded array shape and SHA-256. Adapter directory references are
+also required to be repo-relative, and their canonical paths — including any
+directory symlinks — must remain under the evidence root before reports-only
+verification, strict hashing, or model loading. The selected epoch is re-derived
 from the rule rather than trusted. Epoch checkpoints are checked against their
 exact directory manifests. For a distributed selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
@@ -118,15 +121,22 @@ written under `outputs/`, outside the adapter payload.
 The CLI loads each required pinned publisher split once and shares its ordered
 validation and test labels across every verifier stage, so a full reports-only
 check does not repeatedly reopen the same held-out data.
+An explicit `verify --training-only` scope ignores existing final-test and
+interval artifacts, loads publisher train only, and verifies the validation
+metrics, checkpoint selection, and adapter manifests without requesting the
+publisher test split.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
 revision, selected epoch, complete adapter manifest, and experiment config to
 match the validated training and frozen-selection evidence. The publisher-test
 row count is always checked; when the verifier loads the pinned dataset, it also
-checks the ordered row-ID digest. Editing any stored metric, provenance field,
-or calibration temperature by hand makes verification fail — which is the
-point. The GPU-free tests include exactly those tamper cases.
+checks the ordered row-ID digest. The one-run counter must be an exact JSON
+integer, the frozen gate must record the same test-consumption timestamp as the
+final report, and every reported accuracy, macro-F1, and calibrated-ECE delta is
+re-derived from the two verified system blocks. Editing any stored metric,
+provenance field, delta, or calibration temperature by hand makes verification
+fail — which is the point. The GPU-free tests include exactly those tamper cases.
 
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the

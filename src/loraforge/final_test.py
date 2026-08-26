@@ -16,6 +16,7 @@ from .provenance import (
     environment,
     load_logits,
     read_json,
+    resolve_adapter_directory,
     save_logits,
     sha256_array,
     sha256_labels,
@@ -32,6 +33,7 @@ from .selection import (
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
 CONFIRMATION = "i-am-running-the-single-final-test"
+DELTA_NOTE = "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is"
 
 
 def _system_block(
@@ -82,7 +84,8 @@ def run_final_test(
     frozen = require_frozen_selection(root=root)
 
     base_model, tokenizer = load_quantized_base(config)
-    model = attach_saved_adapter(base_model, root / frozen["selected_adapter_dir"])
+    adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
+    model = attach_saved_adapter(base_model, adapter_dir)
     bundle = load_dataset(allow_test=True, config=config.data)
     test = bundle.require_test()
     if len(test) != config.data.publisher_test_rows:
@@ -166,7 +169,7 @@ def run_final_test(
             - base["metrics_before_temperature"]["accuracy"],
             "ece_after_temperature": tuned["metrics_after_temperature"]["calibration"]["ece"]
             - base["metrics_after_temperature"]["calibration"]["ece"],
-            "note": "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is",
+            "note": DELTA_NOTE,
         },
     }
     write_json(report, root / FINAL_REPORT)
@@ -188,10 +191,22 @@ def verify_final_report(
     if labels is not None and test_split is not None:
         raise ValueError("provide either labels or test_split, not both")
     report = read_json(root / FINAL_REPORT)
-    if report.get("test_evaluations_run") != 1:
+    if (
+        type(report.get("test_evaluations_run")) is not int
+        or report["test_evaluations_run"] != 1
+    ):
         raise EvidenceError("the final report must record exactly one test evaluation")
     training_report = read_json(root / TRAINING_REPORT)
     frozen = read_json(root / "outputs" / "frozen-selection.json")
+    if frozen.get("test_evaluated") is not True:
+        raise EvidenceError("frozen selection must record that the test budget was consumed")
+    report_timestamp = report.get("created_at_utc")
+    if not isinstance(report_timestamp, str) or not report_timestamp:
+        raise EvidenceError("final report created_at_utc must be a timestamp string")
+    if frozen.get("test_evaluated_at_utc") != report_timestamp:
+        raise EvidenceError(
+            "frozen selection test-consumption timestamp does not match the final report"
+        )
     fitted_temperatures = verify_frozen_selection(root=root, labels=validation_labels)
 
     expected_provenance = {
@@ -205,7 +220,8 @@ def verify_final_report(
         "config": training_report["config"],
     }
     for field, expected in expected_provenance.items():
-        if report.get(field) != expected:
+        actual = report.get(field)
+        if type(actual) is not type(expected) or actual != expected:
             raise EvidenceError(
                 f"final report {field} does not match the validated training and frozen evidence"
             )
@@ -267,10 +283,39 @@ def verify_final_report(
             "logits_sha256": sha256_array(logits),
         }
 
-    delta = (
-        report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"]
-        - report["systems"]["base"]["metrics_before_temperature"]["macro_f1"]
-    )
-    if abs(delta - report["delta"]["macro_f1"]) > METRIC_TOLERANCE:
-        raise EvidenceError("recorded macro-F1 delta does not match its own system metrics")
-    return {"verified": True, "systems": checked, "macro_f1_delta": delta}
+    expected_delta = {
+        "macro_f1": (
+            systems["tuned"]["metrics_before_temperature"]["macro_f1"]
+            - systems["base"]["metrics_before_temperature"]["macro_f1"]
+        ),
+        "accuracy": (
+            systems["tuned"]["metrics_before_temperature"]["accuracy"]
+            - systems["base"]["metrics_before_temperature"]["accuracy"]
+        ),
+        "ece_after_temperature": (
+            systems["tuned"]["metrics_after_temperature"]["calibration"]["ece"]
+            - systems["base"]["metrics_after_temperature"]["calibration"]["ece"]
+        ),
+        "note": DELTA_NOTE,
+    }
+    recorded_delta = report.get("delta")
+    if not isinstance(recorded_delta, dict) or set(recorded_delta) != set(expected_delta):
+        raise EvidenceError("final report delta fields do not match the frozen protocol")
+    for field, expected in expected_delta.items():
+        recorded = recorded_delta[field]
+        if isinstance(expected, str):
+            if recorded != expected:
+                raise EvidenceError(f"final report delta.{field} does not match the protocol")
+        elif (
+            type(recorded) not in (int, float)
+            or not np.isfinite(recorded)
+            or abs(recorded - expected) > METRIC_TOLERANCE
+        ):
+            raise EvidenceError(
+                f"final report delta.{field} does not match its own system metrics"
+            )
+    return {
+        "verified": True,
+        "systems": checked,
+        "macro_f1_delta": expected_delta["macro_f1"],
+    }
