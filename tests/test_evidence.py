@@ -243,6 +243,50 @@ def test_modified_adapter_file_is_rejected(tmp_path) -> None:
         )
 
 
+@pytest.mark.parametrize("verify_adapters", [False, True])
+def test_epoch_adapter_directory_cannot_be_absolute_outside_the_evidence_root(
+    tmp_path, verify_adapters
+) -> None:
+    root = tmp_path / "run"
+    report = make_training_run(root)
+    outside = write_adapter(tmp_path, "outside-epoch-1", "weights-1")
+    report["epochs"][0]["adapter_dir"] = str((tmp_path / outside).resolve())
+
+    with pytest.raises(EvidenceError, match="repo-relative"):
+        verify_training_report(
+            report,
+            root=root,
+            labels=LABELS,
+            verify_adapters=verify_adapters,
+        )
+
+
+def test_selected_adapter_directory_symlink_cannot_escape_the_evidence_root(tmp_path) -> None:
+    root = tmp_path / "run"
+    report = make_training_run(root)
+    outside = tmp_path / write_adapter(tmp_path, "outside-selected", "weights-2")
+    link = root / "adapters" / "linked-selected"
+    link.symlink_to(outside, target_is_directory=True)
+    report["selection"]["selected_adapter_dir"] = "adapters/linked-selected"
+
+    with pytest.raises(EvidenceError, match="escapes its evidence root"):
+        verify_training_report(report, root=root, labels=LABELS)
+
+
+def test_frozen_adapter_directory_cannot_traverse_outside_the_evidence_root(tmp_path) -> None:
+    root = tmp_path / "run"
+    make_training_run(root)
+    build_frozen_selection(root=root, labels=LABELS)
+    write_adapter(tmp_path, "outside-selected", "weights-2")
+    path = root / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["selected_adapter_dir"] = "../outside-selected"
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="repo-relative"):
+        require_frozen_selection(root=root)
+
+
 def test_selected_adapter_model_card_is_mutable_but_payload_is_not(tmp_path) -> None:
     make_training_run(tmp_path)
     report = read_json(tmp_path / "outputs" / "training-report.json")
