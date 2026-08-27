@@ -42,12 +42,23 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _regular_snapshot_files(root: Path) -> list[Path]:
+    """List only real payload files; symlinks make a snapshot leave its root."""
+    entries = list(root.rglob("*"))
+    symlinks = sorted(str(item.relative_to(root)) for item in entries if item.is_symlink())
+    if symlinks:
+        raise EvidenceError(
+            f"adapter snapshots must not contain symlinks: {symlinks}"
+        )
+    return sorted(item for item in entries if item.is_file())
+
+
 def sha256_directory(path: Path) -> dict[str, Any]:
     """Hash every file in a directory by sorted relative path, plus a combined digest."""
     root = Path(path)
     if not root.is_dir():
         raise EvidenceError(f"{root} is not a directory")
-    files = sorted(item for item in root.rglob("*") if item.is_file())
+    files = _regular_snapshot_files(root)
     if not files:
         raise EvidenceError(f"{root} contains no files to hash")
     per_file = {str(item.relative_to(root)): sha256_file(item) for item in files}
@@ -83,9 +94,7 @@ def verify_directory_snapshot(
         raise EvidenceError("recorded directory snapshot has no file manifest")
 
     actual_paths = {
-        str(item.relative_to(root)): item
-        for item in root.rglob("*")
-        if item.is_file()
+        str(item.relative_to(root)): item for item in _regular_snapshot_files(root)
     }
     expected_payload = set(recorded_files) - mutable_files
     actual_payload = set(actual_paths) - mutable_files

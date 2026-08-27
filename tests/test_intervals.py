@@ -104,9 +104,10 @@ def test_paired_counts_are_exact() -> None:
 
 
 def test_mcnemar_finds_no_effect_when_fixes_and_breaks_are_equal() -> None:
-    result = mcnemar(50, 50)
-    assert result["p_value"] == pytest.approx(1.0)
-    assert result["chi_square"] == pytest.approx(0.01)
+    for fixed, broken in ((1, 1), (50, 50)):
+        result = mcnemar(fixed, broken)
+        assert result["p_value"] == pytest.approx(1.0)
+        assert result["chi_square"] == 0.0
 
 
 def test_mcnemar_is_decisive_for_a_lopsided_split() -> None:
@@ -174,6 +175,38 @@ def test_intervals_round_trip_and_spend_no_test_budget(tmp_path) -> None:
     assert built["new_test_evaluations"] == 0
     assert built["bootstrap"]["delta"]["ci_lower"] > 0
     assert verify_intervals(root=tmp_path, labels=list(labels))["verified"] is True
+
+
+@pytest.mark.parametrize("replacement", [True, 1.0])
+def test_interval_entry_points_require_an_exact_integer_test_count(
+    tmp_path, replacement
+) -> None:
+    from loraforge.intervals import build_intervals, verify_intervals
+    from loraforge.provenance import EvidenceError, read_json, sha256_file, write_json
+
+    labels = LABELS
+    base = predictions_with_accuracy(labels, 220, seed=14)
+    tuned = predictions_with_accuracy(labels, 370, seed=15)
+    make_final_test_report(tmp_path, base, tuned, labels)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["test_evaluations_run"] = replacement
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="exactly one"):
+        build_intervals(root=tmp_path, labels=list(labels))
+
+    report["test_evaluations_run"] = 1
+    write_json(report, path)
+    build_intervals(root=tmp_path, labels=list(labels))
+    report["test_evaluations_run"] = replacement
+    write_json(report, path)
+    intervals_path = tmp_path / "outputs" / "test-intervals-v2.json"
+    intervals = read_json(intervals_path)
+    intervals["source_report_sha256"] = sha256_file(path)
+    write_json(intervals, intervals_path)
+    with pytest.raises(EvidenceError, match="exactly one"):
+        verify_intervals(root=tmp_path, labels=list(labels))
 
 
 def test_edited_confidence_interval_is_rejected(tmp_path) -> None:

@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .provenance import EvidenceError, read_json
+from .provenance import EvidenceError, read_json, sha256_file
 
 
 PLACEHOLDER = "[More Information Needed]"
@@ -65,7 +65,8 @@ def _final_report_for_run(root: Path, report: dict[str, Any]) -> dict[str, Any] 
         "config": report["config"],
     }
     for field, value in expected.items():
-        if final.get(field) != value:
+        actual = final.get(field)
+        if type(actual) is not type(value) or actual != value:
             raise EvidenceError(
                 f"final report {field} does not belong to this training run; "
                 "refusing to quote its test result"
@@ -77,10 +78,41 @@ def _final_report_for_run(root: Path, report: dict[str, Any]) -> dict[str, Any] 
     return final
 
 
+def _verified_reports_for_card(root: Path, report: dict[str, Any]) -> dict[str, Any] | None:
+    """Verify validation evidence and require held-out claims to be hash-bound."""
+    from .intervals import INTERVALS_REPORT, SOURCE_REPORT
+    from .selection import verify_training_report
+
+    # Model-card generation is CPU-only and keeps publisher test locked. The
+    # training verifier reloads publisher train to recompute validation metrics.
+    verify_training_report(report, root=root, verify_adapters=False)
+    final = _final_report_for_run(root, report)
+    if final is None:
+        return None
+
+    intervals_path = root / INTERVALS_REPORT
+    if not intervals_path.exists():
+        raise EvidenceError(
+            "held-out model-card claims require the hash-bound intervals report"
+        )
+    intervals = read_json(intervals_path)
+    final_path = root / SOURCE_REPORT
+    if (
+        intervals.get("source_report") != SOURCE_REPORT
+        or intervals.get("source_report_sha256") != sha256_file(final_path)
+    ):
+        raise EvidenceError(
+            "final report is not hash-bound by the intervals evidence; "
+            "refusing to quote its held-out results"
+        )
+    return final
+
+
 def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> str:
     """Render the card for the selected adapter under ``root``."""
     root = Path(root)
     report = read_json(root / "outputs/training-report.json")
+    final = _verified_reports_for_card(root, report)
     config = report["config"]
     lora, training, data = config["lora"], config["training"], config["data"]
     environment = report["environment"]
@@ -100,9 +132,6 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     adapter_bytes = selected_hashes["total_bytes"]
     if adapter_bytes <= 0:
         raise EvidenceError("recorded selected-adapter size must be positive")
-
-    # Only a run that actually evaluated the held-out split may quote it.
-    final = _final_report_for_run(root, report)
 
     lines: list[str] = []
     add = lines.append
