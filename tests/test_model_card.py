@@ -4,13 +4,25 @@ import json
 
 import pytest
 
+import loraforge.selection as selection_module
 from loraforge.config import default_config
 from loraforge.model_card import PLACEHOLDER, build_model_card, write_model_card
 from loraforge.provenance import (
     EvidenceError,
     sha256_directory,
+    sha256_file,
     write_json,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_card_formatting_from_dataset_loading(monkeypatch):
+    """Formatting tests use minimal reports; verifier behavior has focused tests below."""
+    monkeypatch.setattr(
+        selection_module,
+        "verify_training_report",
+        lambda report, *, root, verify_adapters: report["epochs"][-1],
+    )
 
 
 def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
@@ -58,6 +70,7 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
         tmp_path / "outputs" / "training-report.json",
     )
     if with_test:
+        final_path = tmp_path / "outputs" / "final-test-report.json"
         write_json(
             {
                 "test_evaluated": True,
@@ -73,7 +86,14 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
                     "tuned": {"metrics_before_temperature": {"accuracy": 0.9333, "macro_f1": 0.9333}},
                 },
             },
-            tmp_path / "outputs" / "final-test-report.json",
+            final_path,
+        )
+        write_json(
+            {
+                "source_report": "outputs/final-test-report.json",
+                "source_report_sha256": sha256_file(final_path),
+            },
+            tmp_path / "outputs" / "test-intervals-v2.json",
         )
 
 
@@ -150,6 +170,48 @@ def test_unrelated_final_report_is_refused(tmp_path) -> None:
     report["selected_epoch"] = 1
     write_json(report, path)
     with pytest.raises(EvidenceError, match="does not belong"):
+        build_model_card(root=tmp_path)
+
+
+def test_model_card_runs_training_evidence_verification(tmp_path, monkeypatch) -> None:
+    make_run(tmp_path)
+    calls = []
+
+    def reject_unverified(report, *, root, verify_adapters):
+        calls.append((root, verify_adapters))
+        raise EvidenceError("validation metrics are not verified")
+
+    monkeypatch.setattr(selection_module, "verify_training_report", reject_unverified)
+    with pytest.raises(EvidenceError, match="validation metrics are not verified"):
+        build_model_card(root=tmp_path)
+    assert calls == [(tmp_path, False)]
+
+
+def test_edited_final_metrics_are_not_quoted_without_their_hash_binding(tmp_path) -> None:
+    make_run(tmp_path, with_test=True)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = json.loads(path.read_text())
+    report["systems"]["tuned"]["metrics_before_temperature"]["macro_f1"] = 0.9999
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="not hash-bound"):
+        build_model_card(root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [("test_evaluated", 1), ("test_evaluations_run", True)],
+)
+def test_model_card_rejects_boolean_integer_protocol_aliases(
+    tmp_path, field, replacement
+) -> None:
+    make_run(tmp_path, with_test=True)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = json.loads(path.read_text())
+    report[field] = replacement
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match=field):
         build_model_card(root=tmp_path)
 
 
