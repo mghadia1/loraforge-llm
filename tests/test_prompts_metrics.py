@@ -8,6 +8,7 @@ from loraforge.metrics import (
     evaluation_block,
     expected_calibration_error,
     fit_temperature,
+    negative_log_likelihood,
     softmax,
 )
 from loraforge.prompts import (
@@ -126,6 +127,14 @@ def test_metric_math_has_known_answer() -> None:
     assert report["macro_f1"] == 1.0
     assert report["accuracy"] == 1.0
     assert report["calibration"]["ece"] < 0.001
+
+
+def test_nll_does_not_cap_extreme_finite_logit_gaps() -> None:
+    logits = np.array([[1000.0, -1000.0, -1000.0, -1000.0]])
+    assert negative_log_likelihood(logits, [1]) == pytest.approx(2000.0)
+
+    offset_logits = np.full((1, 4), 1e300)
+    assert negative_log_likelihood(offset_logits, [0]) == pytest.approx(np.log(4.0))
 
 
 def test_ece_zero_when_confidence_matches_accuracy() -> None:

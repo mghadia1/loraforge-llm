@@ -15,3 +15,4 @@
 - 2026-08-24 09:00 MST — Made final-report verification fail closed on boolean evaluation counts, an unconsumed frozen test gate, mismatched consumption timestamps, and every tampered delta field.
 - 2026-08-25 09:09 MST — Made experiment-config loading enforce the complete typed JSON schema, rejecting silent defaults, unknown fields, boolean-as-integer values, and malformed nested arrays before model or dataset work.
 - 2026-08-26 09:07 MST — Bound training-report config and copied provenance to the typed experiment protocol, including model identity, development row counts, exact epoch sequence, test-lock state, and selection rule; 218 tests and strict training-only evidence verification passed without loading publisher test.
+- 2026-08-27 14:30 MST — Replaced clipped-probability NLL with stable log-sum-exp arithmetic so extreme finite logit gaps retain their full loss while preserving the recorded float32 scaling path.

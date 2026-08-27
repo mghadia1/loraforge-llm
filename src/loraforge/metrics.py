@@ -159,9 +159,14 @@ def negative_log_likelihood(
 ) -> float:
     logits, label_array = _logits_and_labels(class_logits, labels)
     fitted_temperature = _positive_finite(temperature, "temperature")
-    probabilities = softmax(logits / fitted_temperature)
-    true_probability = probabilities[np.arange(len(label_array)), label_array]
-    return float(-np.log(np.clip(true_probability, 1e-12, 1.0)).mean())
+    # Scale before widening, matching the historical float32 evidence path.
+    # Computing log-softmax directly avoids underflowing a very unlikely true
+    # class to zero and then silently capping its loss at -log(1e-12).
+    scaled_logits = np.asarray(logits / fitted_temperature, dtype=float)
+    shifted_logits = scaled_logits - scaled_logits.max(axis=1, keepdims=True)
+    shifted_log_partition = np.log(np.exp(shifted_logits).sum(axis=1))
+    true_shifted_logits = shifted_logits[np.arange(len(label_array)), label_array]
+    return float((shifted_log_partition - true_shifted_logits).mean())
 
 
 def fit_temperature(

@@ -82,6 +82,9 @@ invalid-output rate. Temperature scaling cannot change argmax predictions, so
 it cannot improve macro-F1. Metric computation rejects non-finite or wrongly
 shaped logits, invalid labels/probabilities, non-positive calibration-bin counts,
 and invalid temperature-search bounds instead of emitting plausible numbers.
+NLL uses max-shifted log-sum-exp arithmetic, so an extremely unlikely true
+class retains its full finite loss instead of being capped by a clipped,
+underflowed softmax probability.
 
 ## Training the two frozen epochs
 
