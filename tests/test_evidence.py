@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from loraforge.config import default_config
+from loraforge.config import DataConfig, default_config
 from loraforge.data import Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
@@ -34,6 +34,17 @@ from loraforge.selection import (
 
 
 LABELS = [index % 4 for index in range(40)]
+
+
+def synthetic_config():
+    return replace(
+        default_config(),
+        data=DataConfig(
+            train_per_class=10,
+            validation_per_class=10,
+            publisher_test_rows=len(LABELS),
+        ),
+    )
 
 
 def logits_for(labels, margin: float, seed: int) -> np.ndarray:
@@ -76,12 +87,15 @@ def make_training_run(
     selected = write_adapter(
         root, "adapters/selected", f"weights-{best['epoch']}"
     )
+    config = synthetic_config()
     report = {
         "schema_version": 1,
-        "model": default_config().model_name,
-        "model_revision": default_config().model_revision,
-        "config": default_config().to_dict(),
+        "model": config.model_name,
+        "model_revision": config.model_revision,
+        "config": json.loads(json.dumps(config.to_dict())),
         "test_evaluated": False,
+        "train_rows": 40,
+        "validation_rows": len(LABELS),
         "validation_label_sha256": sha256_labels(LABELS),
         "base_validation_metrics": evaluation_block(base_logits, LABELS),
         "base_validation_logits": save_logits(
@@ -101,6 +115,7 @@ def make_training_run(
 
 def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     frozen = read_json(root / "outputs" / "frozen-selection.json")
+    training = read_json(root / "outputs" / "training-report.json")
     base_logits = logits_for(LABELS, 0.4, seed=21)
     tuned_logits = logits_for(LABELS, tuned_margin, seed=22)
     base = _system_block(base_logits, LABELS, frozen["validation"]["base"]["temperature"], 3.0)
@@ -116,7 +131,7 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
         "model": frozen["model"],
         "model_revision": frozen["model_revision"],
         "selected_epoch": frozen["selected_epoch"],
-        "config": default_config().to_dict(),
+        "config": training["config"],
         "selected_adapter_hashes": frozen["selected_adapter_hashes"],
         "systems": {
             "base": {**base, "logits": save_logits(base_logits, root, "outputs/logits/base-test.npy")},
@@ -195,6 +210,58 @@ def test_hand_edited_per_class_metric_is_rejected(tmp_path) -> None:
 
     with pytest.raises(EvidenceError, match=r"epoch-2\.per_class\.World\.recall"):
         verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("schema_version",), True, "schema_version"),
+        (("model",), "unrelated/model", "model"),
+        (("model_revision",), "0" * 40, "model_revision"),
+        (("test_evaluated",), 0, "test_evaluated"),
+        (("train_rows",), True, "train_rows"),
+        (("validation_rows",), 39, "validation_rows"),
+        (("config", "training", "epochs"), True, "typed experiment schema"),
+    ],
+)
+def test_training_report_provenance_is_bound_to_its_typed_config(
+    tmp_path, path, replacement, message
+) -> None:
+    report = make_training_run(tmp_path)
+    target = report
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize("epochs", [[1], [1, 3], [1, True]])
+def test_training_report_epoch_sequence_matches_the_config(tmp_path, epochs) -> None:
+    report = make_training_run(tmp_path)
+    report["epochs"] = [report["epochs"][index - 1] for index in range(len(epochs))]
+    for entry, epoch in zip(report["epochs"], epochs):
+        entry["epoch"] = epoch
+
+    with pytest.raises(EvidenceError, match="epoch sequence"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_training_report_selection_rule_is_frozen(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    report["selection"]["rule"] = "highest score wins"
+
+    with pytest.raises(EvidenceError, match="selection rule"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_validation_label_count_is_bound_to_the_config(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    report["validation_label_sha256"] = sha256_labels(LABELS[:-4])
+
+    with pytest.raises(EvidenceError, match="validation label count"):
+        verify_training_report(report, root=tmp_path, labels=LABELS[:-4])
 
 
 def test_swapped_logits_file_is_rejected_by_its_hash(tmp_path) -> None:

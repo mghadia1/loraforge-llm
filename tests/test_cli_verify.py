@@ -6,8 +6,10 @@ import sys
 import pytest
 
 from loraforge import cli
+from loraforge.config import default_config
 from loraforge.data import DatasetBundle, Example, Split
 from loraforge.intervals import INTERVALS_REPORT
+from loraforge.provenance import EvidenceError
 
 
 def one_row_split(name: str, label: int) -> Split:
@@ -21,7 +23,7 @@ def write_report_markers(root, *, with_test: bool) -> None:
     outputs = root / "outputs"
     outputs.mkdir()
     (outputs / "training-report.json").write_text(
-        json.dumps({"config": {"data": {}}}), encoding="utf-8"
+        json.dumps({"config": default_config().to_dict()}), encoding="utf-8"
     )
     if with_test:
         (outputs / "final-test-report.json").write_text("{}", encoding="utf-8")
@@ -118,3 +120,27 @@ def test_training_only_verification_keeps_the_test_split_locked(
             "adapter_files_verified": True,
         }
     }
+
+
+def test_verify_rejects_a_malformed_embedded_config_before_loading_data(
+    tmp_path, monkeypatch
+) -> None:
+    write_report_markers(tmp_path, with_test=False)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["config"]["training"]["epochs"] = True
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli,
+        "load_dataset",
+        lambda **kwargs: pytest.fail("malformed config reached dataset loading"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["loraforge", "verify", "--root", str(tmp_path), "--training-only"],
+    )
+
+    with pytest.raises(EvidenceError, match="typed experiment schema"):
+        cli.main()

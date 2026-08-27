@@ -192,11 +192,14 @@ def main() -> int:
         return 0
 
     if args.command == "verify":
-        from .config import DataConfig
         from .final_test import verify_final_report
         from .intervals import INTERVALS_REPORT, verify_intervals
         from .provenance import read_json
-        from .selection import TRAINING_REPORT, verify_training_report
+        from .selection import (
+            TRAINING_REPORT,
+            training_report_config,
+            verify_training_report,
+        )
 
         checked = {}
         root = Path(args.root)
@@ -215,12 +218,13 @@ def main() -> int:
         # labels. Do that once for the whole verification chain: reloading at each
         # stage used to request the same pinned cache up to six times.
         training_report = read_json(training_path)
+        report_config = training_report_config(training_report)
         needs_test = not args.training_only and (
             final_path.exists() or intervals_path.exists()
         )
         bundle = load_dataset(
             allow_test=needs_test,
-            config=DataConfig(**training_report["config"]["data"]),
+            config=report_config.data,
         )
         validation_labels = bundle.validation.labels
         test = bundle.require_test() if needs_test else None
