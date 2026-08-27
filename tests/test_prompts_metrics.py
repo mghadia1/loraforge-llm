@@ -46,6 +46,14 @@ def test_prompt_has_no_gold_label_in_user_message() -> None:
     assert inference_messages("a story") == messages[:2] or len(messages[:2]) == 2
 
 
+@pytest.mark.parametrize("label", [True, False, 1.0, "1"])
+def test_prompt_construction_rejects_non_integer_labels(label) -> None:
+    with pytest.raises(ValueError, match="label must be an integer"):
+        training_messages("synthetic article", label)
+    with pytest.raises(ValueError, match="label must be an integer"):
+        encode_supervised_example(FakeTokenizer(), "synthetic article", label)
+
+
 def test_class_codes_are_unique_single_tokens() -> None:
     assert class_code_token_ids(FakeTokenizer()) == (11, 12, 13, 14)
 
@@ -110,6 +118,12 @@ def test_oversized_prompt_is_rejected_rather_than_silently_truncated() -> None:
 
     with pytest.raises(ValueError, match="exceeding frozen max"):
         encode_supervised_example(LongTokenizer(), "story", 0, max_length=512)
+
+
+@pytest.mark.parametrize("max_length", [True, 0, -1, 8.0])
+def test_supervised_encoding_requires_a_positive_integer_max_length(max_length) -> None:
+    with pytest.raises(ValueError, match="max_length must be a positive integer"):
+        encode_supervised_example(FakeTokenizer(), "story", 0, max_length=max_length)
 
 
 def test_code_parser_is_exact_not_fuzzy() -> None:
