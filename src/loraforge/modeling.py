@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Iterable
 
 import numpy as np
@@ -103,15 +104,24 @@ def score_class_codes(
     max_length: int = 512,
 ) -> np.ndarray:
     """Return A-D next-token logits for each prompt in one forward pass per batch."""
-    import torch
+    if isinstance(batch_size, bool) or not isinstance(batch_size, Integral) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
+    if isinstance(max_length, bool) or not isinstance(max_length, Integral) or max_length < 1:
+        raise ValueError("max_length must be a positive integer")
+    batch_size, max_length = int(batch_size), int(max_length)
 
     token_rows = [prompt_token_ids(tokenizer, text) for text in texts]
+    if not token_rows:
+        raise ValueError("cannot score an empty text collection")
     too_long = [len(row) for row in token_rows if len(row) > max_length]
     if too_long:
         raise ValueError(
             f"{len(too_long)} prompts exceed frozen max_length={max_length}; "
             "do not silently truncate evaluation text"
         )
+
+    import torch
+
     code_ids = torch.tensor(class_code_token_ids(tokenizer), device=model.device)
     if tokenizer.pad_token_id is None:
         raise ValueError("tokenizer has no pad token ID")

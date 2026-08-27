@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from numbers import Integral
 from typing import Any
 
 from .data import (
@@ -23,6 +24,15 @@ SYSTEM_PROMPT = (
 )
 
 
+def _require_label(label: int) -> int:
+    if isinstance(label, bool) or not isinstance(label, Integral):
+        raise ValueError(f"label must be an integer 0-{len(CLASS_NAMES) - 1}")
+    value = int(label)
+    if value not in LABEL_TO_CODE:
+        raise ValueError(f"label must be 0-{len(CLASS_NAMES) - 1}")
+    return value
+
+
 def inference_messages(text: str) -> list[dict[str, str]]:
     cleaned = normalize_article_text(text)
     return [
@@ -32,8 +42,7 @@ def inference_messages(text: str) -> list[dict[str, str]]:
 
 
 def training_messages(text: str, label: int) -> list[dict[str, str]]:
-    if label not in LABEL_TO_CODE:
-        raise ValueError(f"label must be 0-{len(CLASS_NAMES) - 1}")
+    label = _require_label(label)
     return inference_messages(text) + [
         {"role": "assistant", "content": LABEL_TO_CODE[label]}
     ]
@@ -91,8 +100,10 @@ def encode_supervised_example(
     tokenizer: Any, text: str, label: int, *, max_length: int = 512
 ) -> dict[str, list[int]]:
     """Tokenize one row while masking every non-answer token from SFT loss."""
-    if label not in LABEL_TO_CODE:
-        raise ValueError(f"label must be 0-{len(CLASS_NAMES) - 1}")
+    label = _require_label(label)
+    if isinstance(max_length, bool) or not isinstance(max_length, Integral) or max_length < 1:
+        raise ValueError("max_length must be a positive integer")
+    max_length = int(max_length)
     prompt_ids = prompt_token_ids(tokenizer, text)
     answer_id = class_code_token_ids(tokenizer)[label]
     eos_id = tokenizer.eos_token_id

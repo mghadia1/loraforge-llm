@@ -13,6 +13,9 @@ The contextual detail matters. Mistral has multiple vocabulary IDs that decode
 to the same letter. LoRAForge derives IDs after the actual `[/INST]` boundary
 and fails if appending a code is not exactly one token. It also tokenizes the
 chat template directly, avoiding a duplicated beginning-of-sequence token.
+Prompt construction rejects booleans and other non-integer label aliases, and
+the scorer validates nonempty input plus positive integer batch/length controls
+before importing Torch or touching a model.
 
 ## Data protocol
 

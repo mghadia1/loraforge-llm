@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from loraforge.modeling import _left_pad_token_rows, resolve_last_logit_kwargs
+from loraforge.modeling import (
+    _left_pad_token_rows,
+    resolve_last_logit_kwargs,
+    score_class_codes,
+)
 
 
 def test_left_padding_builds_plain_rectangular_model_inputs() -> None:
@@ -18,6 +22,23 @@ def test_left_padding_builds_plain_rectangular_model_inputs() -> None:
 def test_left_padding_rejects_an_empty_batch() -> None:
     with pytest.raises(ValueError, match="empty prompt batch"):
         _left_pad_token_rows([], pad_token_id=2)
+
+
+@pytest.mark.parametrize("batch_size", [True, 0, -1, 1.5])
+def test_scoring_requires_a_positive_integer_batch_size(batch_size) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        score_class_codes(None, None, ["synthetic article"], batch_size=batch_size)
+
+
+@pytest.mark.parametrize("max_length", [True, 0, -1, 512.0])
+def test_scoring_requires_a_positive_integer_max_length(max_length) -> None:
+    with pytest.raises(ValueError, match="max_length must be a positive integer"):
+        score_class_codes(None, None, ["synthetic article"], max_length=max_length)
+
+
+def test_scoring_rejects_an_empty_collection_before_importing_torch() -> None:
+    with pytest.raises(ValueError, match="empty text collection"):
+        score_class_codes(None, None, [])
 
 
 class ModernCausalLM:
