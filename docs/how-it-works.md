@@ -147,7 +147,11 @@ fail — which is the point. The GPU-free tests include exactly those tamper cas
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the
 card states that limitation instead of inserting a remembered estimate or an
-unsupported explanation.
+unsupported explanation. Before rendering, the generator runs reports-only
+training verification against publisher-train validation labels. Held-out
+numbers are quoted only when the final report's exact SHA-256 is bound by the
+tracked intervals evidence, so model-card generation never needs to reopen the
+publisher test split.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
