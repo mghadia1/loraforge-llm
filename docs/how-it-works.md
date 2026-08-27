@@ -120,7 +120,9 @@ from the rule rather than trusted. The training report's embedded experiment
 config is parsed through the complete typed schema before dataset loading, and
 its model identity, development row counts, epoch sequence, test-lock state,
 and selection rule must agree with that config. Epoch checkpoints are checked
-against their exact directory manifests. For a distributed selected adapter, every recorded
+against their exact directory manifests; payload files and subdirectories must
+be real entries rather than symlinks, so no executable weight can escape the
+evidence root while still passing a same-content hash check. For a distributed selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.
@@ -147,7 +149,11 @@ fail — which is the point. The GPU-free tests include exactly those tamper cas
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the
 card states that limitation instead of inserting a remembered estimate or an
-unsupported explanation.
+unsupported explanation. Before rendering, the generator runs reports-only
+training verification against publisher-train validation labels. Held-out
+numbers are quoted only when the final report's exact SHA-256 is bound by the
+tracked intervals evidence, so model-card generation never needs to reopen the
+publisher test split.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
