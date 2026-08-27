@@ -120,7 +120,9 @@ from the rule rather than trusted. The training report's embedded experiment
 config is parsed through the complete typed schema before dataset loading, and
 its model identity, development row counts, epoch sequence, test-lock state,
 and selection rule must agree with that config. Epoch checkpoints are checked
-against their exact directory manifests. For a distributed selected adapter, every recorded
+against their exact directory manifests; payload files and subdirectories must
+be real entries rather than symlinks, so no executable weight can escape the
+evidence root while still passing a same-content hash check. For a distributed selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.

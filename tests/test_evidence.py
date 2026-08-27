@@ -24,6 +24,7 @@ from loraforge.provenance import (
     save_logits,
     sha256_directory,
     sha256_labels,
+    verify_directory_snapshot,
     write_json,
 )
 from loraforge.selection import (
@@ -318,6 +319,40 @@ def test_modified_adapter_file_is_rejected(tmp_path) -> None:
         verify_training_report(
             read_json(tmp_path / "outputs" / "training-report.json"), root=tmp_path, labels=LABELS
         )
+
+
+def test_adapter_snapshot_rejects_payload_symlinks(tmp_path) -> None:
+    adapter = tmp_path / "adapter"
+    outside = tmp_path / "outside"
+    adapter.mkdir()
+    outside.mkdir()
+    (adapter / "adapter_config.json").write_text("{}", encoding="utf-8")
+    payload = outside / "adapter_model.safetensors"
+    payload.write_text("outside weights", encoding="utf-8")
+    (adapter / "adapter_model.safetensors").symlink_to(payload)
+
+    with pytest.raises(EvidenceError, match="must not contain symlinks"):
+        sha256_directory(adapter)
+
+
+def test_adapter_verification_rejects_a_same_content_symlink_swap(tmp_path) -> None:
+    adapter = tmp_path / "adapter"
+    outside = tmp_path / "outside"
+    adapter.mkdir()
+    outside.mkdir()
+    config = adapter / "adapter_config.json"
+    weights = adapter / "adapter_model.safetensors"
+    config.write_text("{}", encoding="utf-8")
+    weights.write_text("recorded weights", encoding="utf-8")
+    snapshot = sha256_directory(adapter)
+
+    external_weights = outside / weights.name
+    external_weights.write_text("recorded weights", encoding="utf-8")
+    weights.unlink()
+    weights.symlink_to(external_weights)
+
+    with pytest.raises(EvidenceError, match="must not contain symlinks"):
+        verify_directory_snapshot(adapter, snapshot)
 
 
 @pytest.mark.parametrize("verify_adapters", [False, True])
