@@ -152,7 +152,10 @@ unsupported explanation.
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
 zero-new-evaluations claim, bootstrap settings and no-improvement count, paired
-counts, and McNemar statistics. Extremely small p-values carry a scientific
+counts, and McNemar statistics. The continuity correction clamps equal fixed
+and broken counts to a zero chi-square rather than squaring a negative adjusted
+difference. Standalone interval commands also require an exact integer one-run
+count and a fully typed embedded config before any dataset load. Extremely small p-values carry a scientific
 string so float underflow can never turn them into a false zero.
 
 ## The one test evaluation

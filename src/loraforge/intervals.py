@@ -190,7 +190,8 @@ def mcnemar(fixed: int, broken: int) -> dict[str, Any]:
             "p_value_scientific": None,
             "note": "the systems never disagreed on correctness",
         }
-    chi_square = (abs(fixed - broken) - 1) ** 2 / discordant if discordant else 0.0
+    corrected_difference = max(0, abs(fixed - broken) - 1)
+    chi_square = corrected_difference**2 / discordant
     log10_p = _log10_two_sided_binomial_tail(discordant, min(fixed, broken))
     p_value = float(10.0**log10_p)
     return {
@@ -249,13 +250,18 @@ def build_intervals(
         raise EvidenceError(
             "published intervals use the frozen 2,000-resample, seed-73 protocol"
         )
-    if report.get("test_evaluated") is not True or report.get("test_evaluations_run") != 1:
-        raise EvidenceError("intervals require the single frozen final-test evaluation")
+    _require_single_test_evaluation(report)
     if labels is None:
-        from .config import DataConfig
+        from .config import config_from_dict
         from .data import load_dataset
 
-        bundle = load_dataset(allow_test=True, config=DataConfig(**report["config"]["data"]))
+        try:
+            config = config_from_dict(report.get("config"))
+        except (TypeError, ValueError) as error:
+            raise EvidenceError(
+                f"final report config does not match the typed experiment schema: {error}"
+            ) from error
+        bundle = load_dataset(allow_test=True, config=config.data)
         labels = bundle.require_test().labels
     if sha256_labels(labels) != report["test_label_sha256"]:
         raise EvidenceError("test labels no longer match the final report")
@@ -291,13 +297,18 @@ def verify_intervals(*, root: Path = Path("."), labels: list[int] | None = None)
     if stored.get("source_report_sha256") != source_hash:
         raise EvidenceError("intervals report is not bound to the current final-test report")
     report = read_json(source_path)
-    if report.get("test_evaluated") is not True or report.get("test_evaluations_run") != 1:
-        raise EvidenceError("intervals require the single frozen final-test evaluation")
+    _require_single_test_evaluation(report)
     if labels is None:
-        from .config import DataConfig
+        from .config import config_from_dict
         from .data import load_dataset
 
-        bundle = load_dataset(allow_test=True, config=DataConfig(**report["config"]["data"]))
+        try:
+            config = config_from_dict(report.get("config"))
+        except (TypeError, ValueError) as error:
+            raise EvidenceError(
+                f"final report config does not match the typed experiment schema: {error}"
+            ) from error
+        bundle = load_dataset(allow_test=True, config=config.data)
         labels = bundle.require_test().labels
     label_hash = sha256_labels(labels)
     if label_hash != report.get("test_label_sha256"):
@@ -338,6 +349,14 @@ def verify_intervals(*, root: Path = Path("."), labels: list[int] | None = None)
         "delta": stored["bootstrap"]["delta"]["delta"],
         "ci": [stored["bootstrap"]["delta"]["ci_lower"], stored["bootstrap"]["delta"]["ci_upper"]],
     }
+
+
+def _require_single_test_evaluation(report: dict[str, Any]) -> None:
+    if report.get("test_evaluated") is not True or (
+        type(report.get("test_evaluations_run")) is not int
+        or report["test_evaluations_run"] != 1
+    ):
+        raise EvidenceError("intervals require exactly one frozen final-test evaluation")
 
 
 def _assert_tree(name: str, actual: Any, expected: Any) -> None:
