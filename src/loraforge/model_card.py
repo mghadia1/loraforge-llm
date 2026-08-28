@@ -263,9 +263,15 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     add("quantization = BitsAndBytesConfig(")
     add("    load_in_4bit=True, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True")
     add(")")
-    add(f"tokenizer = AutoTokenizer.from_pretrained('{report['model']}')")
+    add("revision = " + repr(report["model_revision"]))
+    add(
+        f"tokenizer = AutoTokenizer.from_pretrained('{report['model']}', revision=revision)"
+    )
     add("base = AutoModelForCausalLM.from_pretrained(")
-    add(f"    '{report['model']}', quantization_config=quantization, device_map='auto'")
+    add(
+        f"    '{report['model']}', revision=revision, "
+        "quantization_config=quantization, device_map='auto'"
+    )
     add(")")
     add("model = PeftModel.from_pretrained(base, '<this-adapter>')")
     add("```\n")
