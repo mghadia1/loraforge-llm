@@ -66,6 +66,7 @@ def run_final_test(
     """Score the locked 7,600-row publisher test once with base and tuned systems."""
     from .data import load_dataset
     from .modeling import attach_saved_adapter, load_quantized_base, score_class_codes
+    from .qlora import verify_saved_adapter_config
 
     config.validate()
     root = Path(root)
@@ -83,8 +84,9 @@ def run_final_test(
         )
     frozen = require_frozen_selection(root=root)
 
-    base_model, tokenizer = load_quantized_base(config)
     adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
+    verify_saved_adapter_config(adapter_dir, config)
+    base_model, tokenizer = load_quantized_base(config)
     model = attach_saved_adapter(base_model, adapter_dir)
     bundle = load_dataset(allow_test=True, config=config.data)
     test = bundle.require_test()
