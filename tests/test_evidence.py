@@ -491,6 +491,29 @@ def test_boolean_test_budget_cannot_access_publisher_test(tmp_path) -> None:
         run_final_test(config, confirmation=CONFIRMATION, root=tmp_path)
 
 
+def test_final_test_config_must_match_training_before_model_or_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    config = synthetic_config()
+    drifted = replace(
+        config,
+        training=replace(config.training, per_device_eval_batch_size=1),
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("config drift reached GPU model loading"),
+    )
+    monkeypatch.setattr(
+        "loraforge.data.load_dataset",
+        lambda **kwargs: pytest.fail("config drift reached publisher-test loading"),
+    )
+
+    with pytest.raises(EvidenceError, match="complete frozen training config"):
+        run_final_test(drifted, confirmation=CONFIRMATION, root=tmp_path)
+
+
 def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
