@@ -28,6 +28,9 @@ Row IDs retain their publisher split and source index for provenance, while
 leak detection separately hashes the normalized text actually shown to the
 model. The latter hash has no split namespace, so duplicate content is rejected
 even across publisher train and test splits or when whitespace differs.
+Each loaded split must also contain unique row identities and unique
+model-visible content, preventing repeated articles from silently receiving
+extra training weight or being counted more than once in evaluation.
 
 The default loader asks Hugging Face for `split="train"` only; it does not even
 request the publisher test split. A caller must explicitly set `allow_test=True`,

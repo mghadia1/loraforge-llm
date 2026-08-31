@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 
 from loraforge.compare import compare_runs, require_controlled
-from loraforge.data import Example, Split, SplitLeakError, assert_disjoint, assert_no_leaks
+from loraforge.data import (
+    Example,
+    Split,
+    SplitLeakError,
+    assert_disjoint,
+    assert_no_leaks,
+    assert_unique,
+)
 from loraforge.data import DatasetBundle
 from loraforge.provenance import EvidenceError
 
@@ -76,6 +83,48 @@ def test_whitespace_variants_that_render_identically_are_a_leak() -> None:
     )
     with pytest.raises(SplitLeakError):
         assert_disjoint(trained, judged)
+
+
+@pytest.mark.parametrize("name", ["train", "validation", "test"])
+def test_duplicate_model_visible_content_within_any_split_is_refused(name) -> None:
+    duplicated = Split(
+        name,
+        (
+            Example(row_id=f"{name}-a", text="same\n article", label=0, source_index=1),
+            Example(row_id=f"{name}-b", text=" same   article ", label=2, source_index=2),
+        ),
+    )
+    with pytest.raises(SplitLeakError, match="duplicate model-visible articles"):
+        assert_unique(duplicated)
+
+
+def test_duplicate_row_identity_with_different_text_is_refused() -> None:
+    duplicated = Split(
+        "validation",
+        (
+            Example(row_id="same-row", text="first article", label=0, source_index=1),
+            Example(row_id="same-row", text="second article", label=1, source_index=2),
+        ),
+    )
+    with pytest.raises(SplitLeakError, match="duplicate row identities"):
+        assert_unique(duplicated)
+
+
+def test_bundle_leak_check_enforces_within_split_uniqueness() -> None:
+    duplicated_train = Split(
+        "train",
+        (
+            Example(row_id="a", text="repeated article", label=0, source_index=1),
+            Example(row_id="b", text="repeated article", label=0, source_index=2),
+        ),
+    )
+    with pytest.raises(SplitLeakError, match="duplicate model-visible articles"):
+        assert_no_leaks(
+            DatasetBundle(
+                train=duplicated_train,
+                validation=split("validation", range(100, 110)),
+            )
+        )
 
 
 def test_the_guard_is_not_a_bare_assertion() -> None:
