@@ -68,6 +68,17 @@ def test_multi_token_code_is_rejected() -> None:
         class_code_token_ids(BrokenTokenizer())
 
 
+def test_class_code_context_matches_the_tokenized_scoring_prompt() -> None:
+    class DriftedTokenizer(FakeTokenizer):
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            if not tokenize:
+                return "<chat>"
+            return [99, 20, 21]
+
+    with pytest.raises(ValueError, match="different token context"):
+        class_code_token_ids(DriftedTokenizer())
+
+
 def test_supervised_encoding_masks_prompt_and_trains_only_answer() -> None:
     encoded = encode_supervised_example(FakeTokenizer(), "story", 2, max_length=8)
     assert encoded["input_ids"] == [1, 20, 21, 13, 2]

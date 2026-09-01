@@ -11,8 +11,11 @@ over the allowed classes, supporting macro-F1, NLL, confidence, and ECE without
 
 The contextual detail matters. Mistral has multiple vocabulary IDs that decode
 to the same letter. LoRAForge derives IDs after the actual `[/INST]` boundary
-and fails if appending a code is not exactly one token. It also tokenizes the
-chat template directly, avoiding a duplicated beginning-of-sequence token.
+and fails if appending a code is not exactly one token. It also proves that
+direct chat-template tokenization exactly matches encoding the rendered prompt
+used to derive those contextual IDs; a tokenizer-library drift cannot silently
+make scoring use a different token context. The prompt itself is tokenized
+directly, avoiding a duplicated beginning-of-sequence token.
 Prompt construction rejects booleans and other non-integer label aliases, and
 the scorer validates nonempty input plus positive integer batch/length controls
 before importing Torch or touching a model.

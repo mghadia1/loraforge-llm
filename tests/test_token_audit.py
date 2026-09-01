@@ -15,17 +15,18 @@ class VariableLengthTokenizer:
 
     def encode(self, value, add_special_tokens=False):
         codes = {"A": 11, "B": 12, "C": 13, "D": 14}
-        if value.startswith("<chat>") and value[-1] in codes:
-            return [1, 20, 21, codes[value[-1]]]
-        return [1, 20, 21]
+        code_id = codes.get(value[-1])
+        prompt = value[:-1] if code_id is not None else value
+        words = int(prompt.removeprefix("<chat:").removesuffix(">"))
+        ids = [1, 20, 21, *range(30, 30 + words)]
+        return [*ids, code_id] if code_id is not None else ids
 
     def apply_chat_template(self, messages, tokenize, add_generation_prompt):
-        if not tokenize:
-            return "<chat>"
         article = messages[-1]["content"].removeprefix("Article:\n").removesuffix(
             "\n\nTopic code:"
         )
-        return [1, 20, 21, *range(30, 30 + len(article.split()))]
+        words = len(article.split())
+        return [1, 20, 21, *range(30, 30 + words)] if tokenize else f"<chat:{words}>"
 
 
 def make_split(name: str, word_counts: list[int], offset: int = 0) -> Split:
