@@ -58,6 +58,12 @@ artifact binds its summaries to the config, split row IDs, tokenizer revision,
 and ordered per-row token lengths, while recording that publisher test was not
 loaded.
 
+The original 10,000-row audit predates that richer schema and remains unchanged
+as historical evidence. Its check path first requires the exact canonical JSON
+digest and frozen default-config digest, then recomputes every stored aggregate
+and contextual class-code ID from publisher train only. Verification returns the
+current normalized audit in memory; it never rewrites the historical artifact.
+
 ## QLoRA setup
 
 The base model is loaded in 4-bit NF4 with double quantization and FP16 compute.
