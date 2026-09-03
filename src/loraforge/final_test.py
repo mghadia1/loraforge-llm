@@ -28,6 +28,7 @@ from .selection import (
     TRAINING_REPORT,
     recompute_block,
     require_frozen_selection,
+    training_report_config,
     verify_frozen_selection,
 )
 
@@ -83,6 +84,11 @@ def run_final_test(
             f"{FINAL_REPORT} already exists; the protocol allows exactly one test evaluation"
         )
     frozen = require_frozen_selection(root=root)
+    recorded_config = training_report_config(read_json(root / TRAINING_REPORT))
+    if config.to_dict() != recorded_config.to_dict():
+        raise EvidenceError(
+            "final-test config does not match the complete frozen training config"
+        )
 
     adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
     verify_saved_adapter_config(adapter_dir, config)
