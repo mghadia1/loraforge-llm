@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from loraforge.qlora import parameter_report
+from loraforge.config import default_config
+from loraforge.provenance import EvidenceError
+from loraforge.qlora import parameter_report, verify_saved_adapter_config
 
 
 class Parameter:
@@ -71,3 +75,54 @@ def test_parameter_report_rejects_accidentally_trainable_base_weight() -> None:
     )
     with pytest.raises(ValueError, match="non-adapter"):
         parameter_report(model)
+
+
+def write_saved_config(path, **updates) -> None:
+    config = default_config()
+    payload = {
+        "base_model_name_or_path": config.model_name,
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "r": config.lora.rank,
+        "lora_alpha": config.lora.alpha,
+        "lora_dropout": config.lora.dropout,
+        "bias": config.lora.bias,
+        "target_modules": list(reversed(config.lora.target_modules)),
+        "rank_pattern": {},
+        "alpha_pattern": {},
+        "revision": None,
+    }
+    payload.update(updates)
+    path.mkdir()
+    (path / "adapter_config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_saved_adapter_config_matches_the_frozen_protocol(tmp_path) -> None:
+    adapter = tmp_path / "adapter"
+    write_saved_config(adapter)
+
+    verified = verify_saved_adapter_config(adapter, default_config())
+
+    assert verified["r"] == 16
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"base_model_name_or_path": "unrelated/model"}, "base_model_name_or_path"),
+        ({"r": 4}, "saved adapter r"),
+        ({"lora_alpha": 16}, "lora_alpha"),
+        ({"lora_dropout": 0.0}, "lora_dropout"),
+        ({"target_modules": ["q_proj"]}, "target_modules"),
+        ({"rank_pattern": {"q_proj": 4}}, "rank_pattern"),
+        ({"use_dora": True}, "use_dora"),
+        ({"use_dora": 0}, "use_dora"),
+        ({"revision": "0" * 40}, "revision"),
+    ],
+)
+def test_saved_adapter_config_rejects_protocol_drift(tmp_path, updates, message) -> None:
+    adapter = tmp_path / "adapter"
+    write_saved_config(adapter, **updates)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_saved_adapter_config(adapter, default_config())
