@@ -126,6 +126,22 @@ def test_the_card_reports_the_run_it_was_generated_from(tmp_path) -> None:
     assert "10,485,760" in card and "0.1445%" in card
 
 
+def test_usage_pins_the_recorded_base_and_tokenizer_revision(tmp_path) -> None:
+    make_run(tmp_path)
+    card = build_model_card(root=tmp_path)
+    revision = default_config().model_revision
+
+    assert f"revision = '{revision}'" in card
+    assert (
+        "AutoTokenizer.from_pretrained("
+        "'mistralai/Mistral-7B-Instruct-v0.3', revision=revision)" in card
+    )
+    assert (
+        "'mistralai/Mistral-7B-Instruct-v0.3', revision=revision, "
+        "quantization_config=quantization" in card
+    )
+
+
 def test_limitations_do_not_invent_unrecorded_comparisons_or_error_analysis(tmp_path) -> None:
     make_run(tmp_path)
     card = build_model_card(root=tmp_path)
