@@ -25,7 +25,7 @@ class LockedTestSplitError(PermissionError):
 
 
 class SplitLeakError(ValueError):
-    """Raised when a row used for training also appears in a split used to judge it.
+    """Raised when duplicated rows could contaminate training or evaluation.
 
     Caught by hand once: growing the training set toward the publisher's full
     120,000 rows would have swallowed the 2,000 validation rows, and every
@@ -197,6 +197,27 @@ def assert_disjoint(trained_on: Split, judged_on: Split) -> None:
         )
 
 
+def assert_unique(split: Split) -> None:
+    """Refuse duplicate provenance or model-visible content within one split."""
+    row_counts = Counter(item.row_id for item in split.examples)
+    duplicate_rows = sum(count - 1 for count in row_counts.values() if count > 1)
+    if duplicate_rows:
+        raise SplitLeakError(
+            f"{split.name} contains {duplicate_rows} duplicate row identities; "
+            "training or evaluation would count the same source row more than once"
+        )
+
+    content_counts = Counter(_content_id(item.text) for item in split.examples)
+    duplicate_content = sum(
+        count - 1 for count in content_counts.values() if count > 1
+    )
+    if duplicate_content:
+        raise SplitLeakError(
+            f"{split.name} contains {duplicate_content} duplicate model-visible articles; "
+            "training or evaluation would count the same content more than once"
+        )
+
+
 def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) -> DatasetBundle:
     config = config or DataConfig()
     from datasets import load_dataset as hf_load_dataset
@@ -237,8 +258,11 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
 
 def assert_no_leaks(bundle: DatasetBundle) -> None:
     """Check every split pair that could contaminate a decision, on every load."""
+    assert_unique(bundle.train)
+    assert_unique(bundle.validation)
     assert_disjoint(bundle.train, bundle.validation)
     if bundle.test is not None:
+        assert_unique(bundle.test)
         assert_disjoint(bundle.train, bundle.test)
         assert_disjoint(bundle.validation, bundle.test)
 

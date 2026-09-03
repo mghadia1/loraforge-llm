@@ -23,3 +23,4 @@
 - 2026-08-28 09:00 MST — Pinned generated model-card tokenizer and base-model usage to the run's recorded model revision, preventing future upstream defaults from silently changing the adapter's inference base.
 - 2026-08-29 09:08 MST — Bound every strict-verified saved PEFT adapter config to the typed base/LoRA protocol and made final inference reject semantic adapter drift before GPU model loading; 256 tests and the offline strict training-only verifier passed without loading publisher test.
 - 2026-08-30 09:04 MST — Bound the final-test entry point to the complete typed config recorded by training, rejecting valid-but-different evaluation settings before model or publisher-test loading.
+- 2026-08-31 09:09 MST — Made dataset loading reject duplicate row identities and normalized model-visible articles within every split, preventing repeated content from being weighted or evaluated more than once.
