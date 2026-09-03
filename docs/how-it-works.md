@@ -125,7 +125,13 @@ its model identity, development row counts, epoch sequence, test-lock state,
 and selection rule must agree with that config. Epoch checkpoints are checked
 against their exact directory manifests; payload files and subdirectories must
 be real entries rather than symlinks, so no executable weight can escape the
-evidence root while still passing a same-content hash check. For a distributed selected adapter, every recorded
+evidence root while still passing a same-content hash check. Strict verification
+also parses every saved PEFT adapter config and binds its base-model identity,
+LoRA rank/alpha/dropout/bias, target modules, task type, and disabled override
+features to the typed experiment protocol. This catches an internally
+hash-consistent adapter that was created with different semantics. The same
+check runs before the final inference adapter is attached. For a distributed
+selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.

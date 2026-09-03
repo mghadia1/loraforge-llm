@@ -2,9 +2,104 @@
 
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
 from typing import Any
 
 from .config import ExperimentConfig
+from .provenance import EvidenceError
+
+
+def verify_saved_adapter_config(
+    adapter_dir: Path, config: ExperimentConfig
+) -> dict[str, Any]:
+    """Bind a saved PEFT adapter's executable protocol to the experiment config.
+
+    Directory hashes prove that an adapter did not change after it was recorded,
+    but a self-consistent snapshot could still have been created with the wrong
+    base model or LoRA settings. Validate the stable, protocol-defining PEFT
+    fields while allowing unrelated metadata added by different PEFT versions.
+    """
+    path = Path(adapter_dir) / "adapter_config.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"cannot read saved adapter config {path}: {error}") from error
+    if type(payload) is not dict:
+        raise EvidenceError("saved adapter config must be a JSON object")
+
+    expected_scalars = {
+        "base_model_name_or_path": config.model_name,
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "r": config.lora.rank,
+        "lora_alpha": config.lora.alpha,
+        "lora_dropout": config.lora.dropout,
+        "bias": config.lora.bias,
+    }
+    for field, expected in expected_scalars.items():
+        actual = payload.get(field)
+        if type(expected) is int:
+            matches = type(actual) is int and actual == expected
+        elif type(expected) is float:
+            matches = (
+                type(actual) in (int, float)
+                and math.isfinite(actual)
+                and actual == expected
+            )
+        else:
+            matches = type(actual) is type(expected) and actual == expected
+        if not matches:
+            raise EvidenceError(
+                f"saved adapter {field}={actual!r} does not match the frozen "
+                f"protocol value {expected!r}"
+            )
+
+    targets = payload.get("target_modules")
+    if (
+        type(targets) is not list
+        or not targets
+        or any(type(target) is not str or not target for target in targets)
+        or len(set(targets)) != len(targets)
+        or set(targets) != set(config.lora.target_modules)
+    ):
+        raise EvidenceError(
+            "saved adapter target_modules do not match the frozen LoRA targets"
+        )
+
+    # These optional PEFT features override or extend the simple frozen LoRA
+    # contract. Missing fields are equivalent to their disabled defaults.
+    disabled_features = {
+        "alpha_pattern": ({}, None),
+        "rank_pattern": ({}, None),
+        "exclude_modules": (None,),
+        "layer_replication": (None,),
+        "layers_to_transform": (None,),
+        "modules_to_save": (None,),
+        "target_parameters": (None,),
+        "trainable_token_indices": (None,),
+        "use_dora": (False, None),
+        "use_qalora": (False, None),
+        "use_rslora": (False, None),
+    }
+    for field, allowed in disabled_features.items():
+        if field in payload and not any(
+            type(payload[field]) is type(expected) and payload[field] == expected
+            for expected in allowed
+        ):
+            raise EvidenceError(
+                f"saved adapter enables unsupported PEFT feature {field}"
+            )
+    if payload.get("lora_bias", False) is not False:
+        raise EvidenceError("saved adapter enables unsupported PEFT feature lora_bias")
+
+    revision = payload.get("revision")
+    if revision is not None and revision != config.model_revision:
+        raise EvidenceError(
+            "saved adapter revision does not match the frozen base-model revision"
+        )
+    return payload
 
 
 def attach_lora(model, config: ExperimentConfig):
