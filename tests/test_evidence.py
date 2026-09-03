@@ -59,7 +59,23 @@ def logits_for(labels, margin: float, seed: int) -> np.ndarray:
 def write_adapter(root: Path, relative: str, payload: str) -> str:
     directory = root / relative
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "adapter_config.json").write_text('{"r": 16}\n', encoding="utf-8")
+    config = synthetic_config()
+    write_json(
+        {
+            "base_model_name_or_path": config.model_name,
+            "peft_type": "LORA",
+            "task_type": "CAUSAL_LM",
+            "r": config.lora.rank,
+            "lora_alpha": config.lora.alpha,
+            "lora_dropout": config.lora.dropout,
+            "bias": config.lora.bias,
+            "target_modules": list(reversed(config.lora.target_modules)),
+            "rank_pattern": {},
+            "alpha_pattern": {},
+            "revision": None,
+        },
+        directory / "adapter_config.json",
+    )
     (directory / "adapter_model.safetensors").write_text(payload, encoding="utf-8")
     return relative
 
@@ -321,6 +337,21 @@ def test_modified_adapter_file_is_rejected(tmp_path) -> None:
         )
 
 
+def test_self_consistent_adapter_snapshot_must_match_the_reported_protocol(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    adapter = tmp_path / "adapters" / "epoch-1"
+    path = adapter / "adapter_config.json"
+    saved = read_json(path)
+    saved["r"] = 4
+    write_json(saved, path)
+    # Re-hashing makes the snapshot internally consistent; semantic verification
+    # must still bind it to the rank-16 experiment config.
+    report["epochs"][0]["adapter_hashes"] = sha256_directory(adapter)
+
+    with pytest.raises(EvidenceError, match="saved adapter r=4"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
 def test_adapter_snapshot_rejects_payload_symlinks(tmp_path) -> None:
     adapter = tmp_path / "adapter"
     outside = tmp_path / "outside"
@@ -512,6 +543,31 @@ def test_final_test_config_must_match_training_before_model_or_test_access(
 
     with pytest.raises(EvidenceError, match="complete frozen training config"):
         run_final_test(drifted, confirmation=CONFIRMATION, root=tmp_path)
+
+
+def test_final_test_checks_adapter_protocol_before_loading_the_base_model(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    adapter = tmp_path / "adapters" / "selected"
+    config_path = adapter / "adapter_config.json"
+    saved = read_json(config_path)
+    saved["r"] = 4
+    write_json(saved, config_path)
+    frozen_path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(frozen_path)
+    frozen["selected_adapter_hashes"] = sha256_directory(adapter)
+    write_json(frozen, frozen_path)
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("adapter drift reached GPU model loading"),
+    )
+
+    with pytest.raises(EvidenceError, match="saved adapter r=4"):
+        run_final_test(
+            synthetic_config(), confirmation=CONFIRMATION, root=tmp_path
+        )
 
 
 def test_second_final_test_run_is_refused(tmp_path) -> None:

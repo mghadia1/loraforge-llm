@@ -138,6 +138,7 @@ def verify_training_report(
     verify_adapters: bool = True,
 ) -> dict[str, Any]:
     """Re-derive selection and every validation metric from the saved logits."""
+    from .qlora import verify_saved_adapter_config
     from .training import select_checkpoint
 
     config = _verify_training_protocol(report)
@@ -158,6 +159,7 @@ def verify_training_report(
         if verify_adapters:
             try:
                 verify_directory_snapshot(adapter_dir, entry["adapter_hashes"])
+                verify_saved_adapter_config(adapter_dir, config)
             except EvidenceError as error:
                 raise EvidenceError(
                     f"epoch-{entry['epoch']} adapter files changed since training: {error}"
@@ -188,6 +190,7 @@ def verify_training_report(
                 selected["adapter_hashes"],
                 mutable_files=frozenset({"README.md"}),
             )
+            verify_saved_adapter_config(selected_dir, config)
         except EvidenceError as error:
             raise EvidenceError(
                 "adapters/selected does not match the selected epoch checkpoint: "

@@ -66,9 +66,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 quantization = BitsAndBytesConfig(
     load_in_4bit=True, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True
 )
-tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+revision = 'c170c708c41dac9275d15a8fff4eca08d52bab71'
+tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3', revision=revision)
 base = AutoModelForCausalLM.from_pretrained(
-    'mistralai/Mistral-7B-Instruct-v0.3', quantization_config=quantization, device_map='auto'
+    'mistralai/Mistral-7B-Instruct-v0.3', revision=revision, quantization_config=quantization, device_map='auto'
 )
 model = PeftModel.from_pretrained(base, '<this-adapter>')
 ```

@@ -125,7 +125,13 @@ its model identity, development row counts, epoch sequence, test-lock state,
 and selection rule must agree with that config. Epoch checkpoints are checked
 against their exact directory manifests; payload files and subdirectories must
 be real entries rather than symlinks, so no executable weight can escape the
-evidence root while still passing a same-content hash check. For a distributed selected adapter, every recorded
+evidence root while still passing a same-content hash check. Strict verification
+also parses every saved PEFT adapter config and binds its base-model identity,
+LoRA rank/alpha/dropout/bias, target modules, task type, and disabled override
+features to the typed experiment protocol. This catches an internally
+hash-consistent adapter that was created with different semantics. The same
+check runs before the final inference adapter is attached. For a distributed
+selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.
@@ -156,7 +162,9 @@ unsupported explanation. Before rendering, the generator runs reports-only
 training verification against publisher-train validation labels. Held-out
 numbers are quoted only when the final report's exact SHA-256 is bound by the
 tracked intervals evidence, so model-card generation never needs to reopen the
-publisher test split.
+publisher test split. Its public usage snippet also pins both the tokenizer and
+base-model loads to the exact model revision recorded by the run, so a later
+upstream default cannot silently change the adapter's inference base.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
