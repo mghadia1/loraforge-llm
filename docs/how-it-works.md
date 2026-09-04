@@ -11,8 +11,11 @@ over the allowed classes, supporting macro-F1, NLL, confidence, and ECE without
 
 The contextual detail matters. Mistral has multiple vocabulary IDs that decode
 to the same letter. LoRAForge derives IDs after the actual `[/INST]` boundary
-and fails if appending a code is not exactly one token. It also tokenizes the
-chat template directly, avoiding a duplicated beginning-of-sequence token.
+and fails if appending a code is not exactly one token. It also proves that
+direct chat-template tokenization exactly matches encoding the rendered prompt
+used to derive those contextual IDs; a tokenizer-library drift cannot silently
+make scoring use a different token context. The prompt itself is tokenized
+directly, avoiding a duplicated beginning-of-sequence token.
 Prompt construction rejects booleans and other non-integer label aliases, and
 the scorer validates nonempty input plus positive integer batch/length controls
 before importing Torch or touching a model.
@@ -28,6 +31,9 @@ Row IDs retain their publisher split and source index for provenance, while
 leak detection separately hashes the normalized text actually shown to the
 model. The latter hash has no split namespace, so duplicate content is rejected
 even across publisher train and test splits or when whitespace differs.
+Each loaded split must also contain unique row identities and unique
+model-visible content, preventing repeated articles from silently receiving
+extra training weight or being counted more than once in evaluation.
 
 The default loader asks Hugging Face for `split="train"` only; it does not even
 request the publisher test split. A caller must explicitly set `allow_test=True`,
@@ -131,7 +137,13 @@ its model identity, development row counts, epoch sequence, test-lock state,
 and selection rule must agree with that config. Epoch checkpoints are checked
 against their exact directory manifests; payload files and subdirectories must
 be real entries rather than symlinks, so no executable weight can escape the
-evidence root while still passing a same-content hash check. For a distributed selected adapter, every recorded
+evidence root while still passing a same-content hash check. Strict verification
+also parses every saved PEFT adapter config and binds its base-model identity,
+LoRA rank/alpha/dropout/bias, target modules, task type, and disabled override
+features to the typed experiment protocol. This catches an internally
+hash-consistent adapter that was created with different semantics. The same
+check runs before the final inference adapter is attached. For a distributed
+selected adapter, every recorded
 configuration and weight file remains hash-checked even if its Hugging Face
 `README.md` changes as distribution metadata. Locally generated model cards are
 written under `outputs/`, outside the adapter payload.
@@ -162,7 +174,9 @@ unsupported explanation. Before rendering, the generator runs reports-only
 training verification against publisher-train validation labels. Held-out
 numbers are quoted only when the final report's exact SHA-256 is bound by the
 tracked intervals evidence, so model-card generation never needs to reopen the
-publisher test split.
+publisher test split. Its public usage snippet also pins both the tokenizer and
+base-model loads to the exact model revision recorded by the run, so a later
+upstream default cannot silently change the adapter's inference base.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,
@@ -182,7 +196,10 @@ file exists, refuses if the adapter's hash has changed since, refuses without an
 explicit confirmation string, and refuses to overwrite an existing final report.
 It also revalidates the experiment config at the entry point: the test budget
 must be the JSON integer `1` (not boolean `true`), and `resume_eligible` must
-remain `false` until the separate explanation gate passes.
+remain `false` until the separate explanation gate passes. Before model or
+publisher-test loading, the complete supplied config must exactly match the
+typed config recorded by training, so even a valid evaluation-setting change
+cannot cross the frozen one-run boundary.
 
 Both systems are scored from the same loaded model — adapter disabled for the
 base, enabled for the tuned — so the prompt, tokenizer, and quantization are

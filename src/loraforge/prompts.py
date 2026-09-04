@@ -60,17 +60,7 @@ def render_training_text(tokenizer: Any, text: str, label: int) -> str:
     )
 
 
-def prompt_token_ids(tokenizer: Any, text: str) -> list[int]:
-    """Return the rendered prompt as flat token IDs.
-
-    `apply_chat_template(tokenize=True)` returns a plain list on older
-    transformers and a `BatchEncoding` (and sometimes a batch-of-one nesting) on
-    newer ones. Normalizing here keeps one prompt contract for training,
-    baseline scoring, and the final evaluation.
-    """
-    encoded = tokenizer.apply_chat_template(
-        inference_messages(text), tokenize=True, add_generation_prompt=True
-    )
+def _flat_template_ids(encoded: Any) -> list[int]:
     ids = encoded["input_ids"] if hasattr(encoded, "keys") else encoded
     if len(ids) and isinstance(ids[0], (list, tuple)):
         if len(ids) != 1:
@@ -82,9 +72,32 @@ def prompt_token_ids(tokenizer: Any, text: str) -> list[int]:
     return flat
 
 
+def prompt_token_ids(tokenizer: Any, text: str) -> list[int]:
+    """Return the rendered prompt as flat token IDs.
+
+    `apply_chat_template(tokenize=True)` returns a plain list on older
+    transformers and a `BatchEncoding` (and sometimes a batch-of-one nesting) on
+    newer ones. Normalizing here keeps one prompt contract for training,
+    baseline scoring, and the final evaluation.
+    """
+    encoded = tokenizer.apply_chat_template(
+        inference_messages(text), tokenize=True, add_generation_prompt=True
+    )
+    return _flat_template_ids(encoded)
+
+
 def class_code_token_ids(tokenizer: Any) -> tuple[int, ...]:
-    probe_prompt = render_inference_prompt(tokenizer, "Tokenizer contract probe.")
-    prompt_ids = tokenizer.encode(probe_prompt, add_special_tokens=False)
+    probe_text = "Tokenizer contract probe."
+    probe_prompt = render_inference_prompt(tokenizer, probe_text)
+    prompt_ids = [
+        int(value) for value in tokenizer.encode(probe_prompt, add_special_tokens=False)
+    ]
+    tokenized_prompt_ids = prompt_token_ids(tokenizer, probe_text)
+    if prompt_ids != tokenized_prompt_ids:
+        raise ValueError(
+            "chat template tokenize=True does not match encoding its rendered prompt; "
+            "refusing to derive class-code IDs from a different token context"
+        )
     ids = []
     for code in CLASS_CODES:
         encoded = tokenizer.encode(probe_prompt + code, add_special_tokens=False)
@@ -105,15 +118,16 @@ def encode_supervised_example(
         raise ValueError("max_length must be a positive integer")
     max_length = int(max_length)
     prompt_ids = prompt_token_ids(tokenizer, text)
-    answer_id = class_code_token_ids(tokenizer)[label]
     eos_id = tokenizer.eos_token_id
     if eos_id is None:
         raise ValueError("tokenizer has no EOS token")
-    input_ids = [*prompt_ids, answer_id, int(eos_id)]
-    if len(input_ids) > max_length:
+    formatted_length = len(prompt_ids) + 2
+    if formatted_length > max_length:
         raise ValueError(
-            f"formatted example has {len(input_ids)} tokens, exceeding frozen max {max_length}"
+            f"formatted example has {formatted_length} tokens, exceeding frozen max {max_length}"
         )
+    answer_id = class_code_token_ids(tokenizer)[label]
+    input_ids = [*prompt_ids, answer_id, int(eos_id)]
     return {
         "input_ids": input_ids,
         "attention_mask": [1] * len(input_ids),
