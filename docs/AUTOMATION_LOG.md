@@ -25,3 +25,6 @@
 - 2026-08-30 09:04 MST — Bound the final-test entry point to the complete typed config recorded by training, rejecting valid-but-different evaluation settings before model or publisher-test loading.
 - 2026-08-31 09:09 MST — Made dataset loading reject duplicate row identities and normalized model-visible articles within every split, preventing repeated content from being weighted or evaluated more than once.
 - 2026-09-01 14:36 MST — Bound contextual class-code IDs to the exact tokenized chat prompt so tokenizer-library drift cannot make scoring or supervision use IDs derived from a different token context.
+- 2026-09-02 09:08 MST — Added a canonical-digest-pinned verifier path for the unchanged legacy 10,000-row token audit; 247 tests, the real cached audit, and strict training-only evidence verification passed without loading publisher test.
+- 2026-09-03 09:02 MST — Reverified the legacy token-audit commit with 247 tests, strict training-only adapter verification, and the cached 10,000-row audit, but outbound safety again blocked push, so no remote branch, PR, or CI run was created.
+- 2026-09-04 09:00 MST — Integrated the legacy token-audit verifier with current main; 267 tests, compile/diff checks, the cached 10,000-row audit, and strict training-only adapter verification passed without loading publisher test.
