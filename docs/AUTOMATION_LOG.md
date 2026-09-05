@@ -25,3 +25,4 @@
 - 2026-08-30 09:04 MST — Bound the final-test entry point to the complete typed config recorded by training, rejecting valid-but-different evaluation settings before model or publisher-test loading.
 - 2026-08-31 09:09 MST — Made dataset loading reject duplicate row identities and normalized model-visible articles within every split, preventing repeated content from being weighted or evaluated more than once.
 - 2026-09-01 14:36 MST — Bound contextual class-code IDs to the exact tokenized chat prompt so tokenizer-library drift cannot make scoring or supervision use IDs derived from a different token context.
+- 2026-09-05 09:08 MST — Repaired the validation-only expanded-data selector to skip duplicate model-visible training candidates while preserving the frozen validation and completed default splits; 265 tests, strict training-only evidence verification, and the refreshed train-only token audit passed without loading publisher test.

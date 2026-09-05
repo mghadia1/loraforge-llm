@@ -43,10 +43,13 @@ selection are frozen.
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
 at offsets 2,000–2,499, excludes them from training, and grows training to
-4,000 rows per class using the next deterministic candidates. One epoch over
-16,000 rows has the same 1,000 optimizer-step budget as two epochs over the
-original 8,000 rows. Its config disables publisher-test evaluation, so any
-comparison must remain on the unchanged validation split.
+4,000 rows per class using the next deterministic content-unique candidates.
+The selector preserves the validation window exactly, then skips any remaining
+publisher row whose normalized model-visible text duplicates validation or an
+earlier selected training row. One epoch over 16,000 rows has the same 1,000
+optimizer-step budget as two epochs over the original 8,000 rows. Its config
+disables publisher-test evaluation, so any comparison must remain on the
+unchanged validation split.
 
 ## Prompt loss
 
