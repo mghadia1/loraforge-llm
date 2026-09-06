@@ -53,6 +53,72 @@ def resolve_last_logit_kwargs(model) -> dict[str, int]:
     return {}
 
 
+def validate_model_tokenizer_vocabulary(model, tokenizer) -> tuple[int, int, int, int]:
+    """Fail before data access when tokenizer IDs cannot be scored by the model.
+
+    Loading a tokenizer and model from the same repository revision is necessary
+    but not sufficient: added tokenizer tokens or an incompatible cached model
+    can leave the input embeddings, LM head, and declared vocabulary at different
+    sizes. Such drift would otherwise surface only during scoring, after a caller
+    may already have opened a locked evaluation split.
+    """
+
+    def positive_size(name: str, value) -> int:
+        if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+        return int(value)
+
+    try:
+        tokenizer_size = positive_size("tokenizer vocabulary size", len(tokenizer))
+    except (TypeError, AttributeError) as error:
+        raise ValueError("tokenizer must expose a finite vocabulary size") from error
+
+    config = getattr(model, "config", None)
+    input_embeddings = getattr(model, "get_input_embeddings", lambda: None)()
+    output_embeddings = getattr(model, "get_output_embeddings", lambda: None)()
+    sizes = {
+        "tokenizer": tokenizer_size,
+        "model config": positive_size(
+            "model config vocabulary size", getattr(config, "vocab_size", None)
+        ),
+        "input embeddings": positive_size(
+            "input embedding vocabulary size",
+            getattr(input_embeddings, "num_embeddings", None),
+        ),
+        "output head": positive_size(
+            "output head vocabulary size",
+            getattr(output_embeddings, "out_features", None),
+        ),
+    }
+    if len(set(sizes.values())) != 1:
+        rendered = ", ".join(f"{name}={size}" for name, size in sizes.items())
+        raise ValueError(f"tokenizer/model vocabulary mismatch: {rendered}")
+
+    vocabulary_size = tokenizer_size
+    for name in ("eos_token_id", "pad_token_id"):
+        token_id = getattr(tokenizer, name, None)
+        if (
+            isinstance(token_id, bool)
+            or not isinstance(token_id, Integral)
+            or not 0 <= token_id < vocabulary_size
+        ):
+            raise ValueError(
+                f"tokenizer {name}={token_id!r} is outside the model vocabulary"
+            )
+
+    code_ids = class_code_token_ids(tokenizer)
+    if any(
+        isinstance(token_id, bool)
+        or not isinstance(token_id, Integral)
+        or not 0 <= token_id < vocabulary_size
+        for token_id in code_ids
+    ):
+        raise ValueError(
+            f"class-code token IDs {code_ids!r} are outside the model vocabulary"
+        )
+    return tuple(int(token_id) for token_id in code_ids)
+
+
 def load_quantized_base(config: ExperimentConfig):
     """Load the frozen base model in 4-bit NF4. Requires a CUDA runtime."""
     import torch
@@ -82,7 +148,9 @@ def load_quantized_base(config: ExperimentConfig):
         torch_dtype=dtype,
     )
     model.config.use_cache = False
-    class_code_token_ids(tokenizer)  # fail before evaluation if the contract changed
+    # This runs before any caller can load publisher test. A vocabulary mismatch
+    # must not consume the one-run boundary merely to fail at index_select.
+    validate_model_tokenizer_vocabulary(model, tokenizer)
     return model, tokenizer
 
 

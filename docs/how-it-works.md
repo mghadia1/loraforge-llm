@@ -95,6 +95,12 @@ NLL uses max-shifted log-sum-exp arithmetic, so an extremely unlikely true
 class retains its full finite loss instead of being capped by a clipped,
 underflowed softmax probability.
 
+Before any evaluation split is loaded, model setup also requires the tokenizer
+vocabulary size, model config, input embeddings, and output head to agree, and
+proves that the EOS, pad, and contextual A–D token IDs are in range. A stale or
+incompatible tokenizer/model cache therefore cannot consume the held-out-data
+boundary merely to fail during scoring.
+
 ## Training the two frozen epochs
 
 `build_supervised_features` encodes each training row and asserts that exactly
