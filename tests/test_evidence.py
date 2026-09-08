@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from loraforge.data import Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
     DELTA_NOTE,
+    FINAL_ATTEMPT,
     _system_block,
     run_final_test,
     verify_final_report,
@@ -576,6 +578,103 @@ def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_final_report(tmp_path)
     with pytest.raises(EvidenceError, match="exactly one test evaluation"):
         run_final_test(default_config(), confirmation=CONFIRMATION, root=tmp_path)
+
+
+def test_failed_final_test_attempt_blocks_retry_before_model_or_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    write_json(
+        {"schema_version": 1, "status": "failed"},
+        tmp_path / FINAL_ATTEMPT,
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("retry reached GPU model loading"),
+    )
+    monkeypatch.setattr(
+        "loraforge.data.load_dataset",
+        lambda **kwargs: pytest.fail("retry reached publisher-test loading"),
+    )
+
+    with pytest.raises(EvidenceError, match="previous final-test attempt"):
+        run_final_test(synthetic_config(), confirmation=CONFIRMATION, root=tmp_path)
+
+
+def test_final_test_claims_attempt_before_loading_publisher_test(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base", lambda config: (object(), object())
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: object()
+    )
+
+    def fail_after_claim(**kwargs):
+        attempt = read_json(tmp_path / FINAL_ATTEMPT)
+        assert attempt["status"] == "in_progress"
+        raise RuntimeError("publisher-test request failed")
+
+    monkeypatch.setattr("loraforge.data.load_dataset", fail_after_claim)
+
+    with pytest.raises(RuntimeError, match="publisher-test request failed"):
+        run_final_test(synthetic_config(), confirmation=CONFIRMATION, root=tmp_path)
+
+    failed = read_json(tmp_path / FINAL_ATTEMPT)
+    assert failed["status"] == "failed"
+    assert failed["error"] == "RuntimeError: publisher-test request failed"
+
+
+def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    test = Split(
+        "test",
+        tuple(
+            Example(
+                row_id=f"test-{index}",
+                text=f"article {index}",
+                label=label,
+                source_index=index,
+            )
+            for index, label in enumerate(LABELS)
+        ),
+    )
+
+    class FakeModel:
+        def disable_adapter(self):
+            return nullcontext()
+
+    class FakeBundle:
+        def require_test(self):
+            return test
+
+    scores = iter(
+        [logits_for(LABELS, 0.4, seed=21), logits_for(LABELS, 2.5, seed=22)]
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base", lambda config: (object(), object())
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: FakeModel()
+    )
+    monkeypatch.setattr("loraforge.data.load_dataset", lambda **kwargs: FakeBundle())
+    monkeypatch.setattr(
+        "loraforge.modeling.score_class_codes", lambda *args, **kwargs: next(scores)
+    )
+
+    report = run_final_test(
+        synthetic_config(), confirmation=CONFIRMATION, root=tmp_path
+    )
+
+    attempt = read_json(tmp_path / FINAL_ATTEMPT)
+    assert attempt["status"] == "completed"
+    assert attempt["completed_at_utc"] == report["created_at_utc"]
+    assert attempt["final_report"] == "outputs/final-test-report.json"
 
 
 def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:

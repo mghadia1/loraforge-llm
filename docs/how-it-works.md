@@ -214,9 +214,12 @@ Both systems are scored from the same loaded model — adapter disabled for the
 base, enabled for the tuned — so the prompt, tokenizer, and quantization are
 identical by construction. Because decoding is constrained to the four class
 logits, the invalid-output rate is 0 by construction; that is a property of the
-scoring design, not a result. A failure during test scoring is written to
-`outputs/failed-attempts/` rather than retried silently, and a negative delta is
-reported exactly like a positive one.
+scoring design, not a result. Immediately before publisher-test loading, the
+command atomically creates `outputs/final-test-attempt.json`. Concurrent runs
+and every later automatic retry are refused if that durable claim exists. The
+claim is retained with a completed or failed status, and a failed claim records
+the exception plus any logits that may belong to the attempt for manual
+protocol review. A negative delta is reported exactly like a positive one.
 
 ## Measured outcome
 

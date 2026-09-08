@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from .selection import (
 )
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
+FINAL_ATTEMPT = Path("outputs/final-test-attempt.json")
 CONFIRMATION = "i-am-running-the-single-final-test"
 DELTA_NOTE = "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is"
 
@@ -56,6 +58,37 @@ def _system_block(
         "scoring_seconds": seconds,
         "seconds_per_row": seconds / len(labels),
     }
+
+
+def _previous_attempt_error(path: Path) -> EvidenceError:
+    return EvidenceError(
+        f"{path} records a previous final-test attempt; the frozen protocol "
+        "forbids an automatic retry"
+    )
+
+
+def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, dict[str, Any]]:
+    """Atomically spend the automatic attempt before publisher-test access."""
+    path = root / FINAL_ATTEMPT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    attempt = {
+        "schema_version": 1,
+        "created_at_utc": utc_now(),
+        "status": "in_progress",
+        "stage": "publisher-test loading, scoring, metrics, and final report",
+        "selected_epoch": selected_epoch,
+        "note": (
+            "this durable claim prevents concurrent or automatic retries; preserve it "
+            "for protocol review even if the attempt fails"
+        ),
+    }
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump(attempt, handle, indent=2)
+            handle.write("\n")
+    except FileExistsError as error:
+        raise _previous_attempt_error(path) from error
+    return path, attempt
 
 
 def run_final_test(
@@ -83,6 +116,8 @@ def run_final_test(
         raise EvidenceError(
             f"{FINAL_REPORT} already exists; the protocol allows exactly one test evaluation"
         )
+    if (root / FINAL_ATTEMPT).exists():
+        raise _previous_attempt_error(root / FINAL_ATTEMPT)
     frozen = require_frozen_selection(root=root)
     recorded_config = training_report_config(read_json(root / TRAINING_REPORT))
     if config.to_dict() != recorded_config.to_dict():
@@ -94,14 +129,16 @@ def run_final_test(
     verify_saved_adapter_config(adapter_dir, config)
     base_model, tokenizer = load_quantized_base(config)
     model = attach_saved_adapter(base_model, adapter_dir)
-    bundle = load_dataset(allow_test=True, config=config.data)
-    test = bundle.require_test()
-    if len(test) != config.data.publisher_test_rows:
-        raise EvidenceError(
-            f"publisher test has {len(test)} rows, expected {config.data.publisher_test_rows}"
-        )
+    attempt_path, attempt = _claim_final_test_attempt(root, frozen["selected_epoch"])
 
     try:
+        bundle = load_dataset(allow_test=True, config=config.data)
+        test = bundle.require_test()
+        if len(test) != config.data.publisher_test_rows:
+            raise EvidenceError(
+                f"publisher test has {len(test)} rows, expected {config.data.publisher_test_rows}"
+            )
+
         def score(disable_adapter: bool) -> tuple[np.ndarray, float]:
             started = time.perf_counter()
             if disable_adapter:
@@ -134,56 +171,68 @@ def run_final_test(
         tuned = _system_block(
             tuned_logits, labels, frozen["validation"]["tuned"]["temperature"], tuned_seconds
         )
-    except Exception as error:  # preserve the failed attempt rather than retrying silently
+        report = {
+            "schema_version": 1,
+            "created_at_utc": utc_now(),
+            "test_evaluated": True,
+            "test_evaluations_run": 1,
+            "split": "publisher test",
+            "rows": len(test),
+            "test_label_sha256": sha256_labels(labels),
+            "test_row_ids_sha256": test.id_sha256(),
+            "model": config.model_name,
+            "model_revision": config.model_revision,
+            "selected_epoch": frozen["selected_epoch"],
+            "selected_adapter_hashes": frozen["selected_adapter_hashes"],
+            "config": config.to_dict(),
+            "environment": environment(),
+            "decoding": (
+                "constrained: argmax over the four class-code token logits, so an unparseable "
+                "free-text answer is impossible by construction and invalid_prediction_rate is 0"
+            ),
+            "systems": {
+                "base": {**base, "logits": base_reference},
+                "tuned": {**tuned, "logits": tuned_reference},
+            },
+            "delta": {
+                "macro_f1": tuned["metrics_before_temperature"]["macro_f1"]
+                - base["metrics_before_temperature"]["macro_f1"],
+                "accuracy": tuned["metrics_before_temperature"]["accuracy"]
+                - base["metrics_before_temperature"]["accuracy"],
+                "ece_after_temperature": tuned["metrics_after_temperature"]["calibration"]["ece"]
+                - base["metrics_after_temperature"]["calibration"]["ece"],
+                "note": DELTA_NOTE,
+            },
+        }
+        write_json(report, root / FINAL_REPORT)
+        frozen["test_evaluated"] = True
+        frozen["test_evaluated_at_utc"] = report["created_at_utc"]
+        write_json(frozen, root / "outputs" / "frozen-selection.json")
+    except Exception as error:  # preserve and block retries after the claimed attempt
         write_json(
             {
-                "created_at_utc": utc_now(),
-                "stage": "test scoring and metrics",
+                **attempt,
+                "status": "failed",
+                "failed_at_utc": utc_now(),
                 "error": f"{type(error).__name__}: {error}",
-                "selected_epoch": frozen["selected_epoch"],
-                "note": "any logits already written under outputs/logits are from this attempt",
+                "note": (
+                    "the only automatic final-test attempt is blocked from retry; any logits "
+                    "already written under outputs/logits are from this attempt"
+                ),
             },
-            root / "outputs" / "failed-attempts" / f"final-test-{int(time.time())}.json",
+            attempt_path,
         )
         raise
 
-    report = {
-        "schema_version": 1,
-        "created_at_utc": utc_now(),
-        "test_evaluated": True,
-        "test_evaluations_run": 1,
-        "split": "publisher test",
-        "rows": len(test),
-        "test_label_sha256": sha256_labels(labels),
-        "test_row_ids_sha256": test.id_sha256(),
-        "model": config.model_name,
-        "model_revision": config.model_revision,
-        "selected_epoch": frozen["selected_epoch"],
-        "selected_adapter_hashes": frozen["selected_adapter_hashes"],
-        "config": config.to_dict(),
-        "environment": environment(),
-        "decoding": (
-            "constrained: argmax over the four class-code token logits, so an unparseable "
-            "free-text answer is impossible by construction and invalid_prediction_rate is 0"
-        ),
-        "systems": {
-            "base": {**base, "logits": base_reference},
-            "tuned": {**tuned, "logits": tuned_reference},
+    write_json(
+        {
+            **attempt,
+            "status": "completed",
+            "completed_at_utc": report["created_at_utc"],
+            "final_report": str(FINAL_REPORT),
         },
-        "delta": {
-            "macro_f1": tuned["metrics_before_temperature"]["macro_f1"]
-            - base["metrics_before_temperature"]["macro_f1"],
-            "accuracy": tuned["metrics_before_temperature"]["accuracy"]
-            - base["metrics_before_temperature"]["accuracy"],
-            "ece_after_temperature": tuned["metrics_after_temperature"]["calibration"]["ece"]
-            - base["metrics_after_temperature"]["calibration"]["ece"],
-            "note": DELTA_NOTE,
-        },
-    }
-    write_json(report, root / FINAL_REPORT)
-    frozen["test_evaluated"] = True
-    frozen["test_evaluated_at_utc"] = report["created_at_utc"]
-    write_json(frozen, root / "outputs" / "frozen-selection.json")
+        attempt_path,
+    )
     return report
 
 
