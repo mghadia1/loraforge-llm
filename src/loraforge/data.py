@@ -137,14 +137,14 @@ def _to_examples(source_split: str, rows: Iterable[dict[str, Any]]) -> list[Exam
 def deterministic_development_split(
     rows: Iterable[dict[str, Any]], config: DataConfig
 ) -> tuple[Split, Split]:
-    """Select balanced train/validation subsets without depending on RNG libraries."""
+    """Select balanced, content-unique subsets without depending on RNG libraries."""
     grouped: dict[int, list[Example]] = {index: [] for index in range(len(CLASS_NAMES))}
     for item in _to_examples("train", rows):
         if item.label not in grouped:
             raise ValueError(f"unexpected class label {item.label}")
         grouped[item.label].append(item)
 
-    train: list[Example] = []
+    ordered_by_label: dict[int, list[Example]] = {}
     validation: list[Example] = []
     validation_start = (
         config.train_per_class
@@ -165,15 +165,42 @@ def deterministic_development_split(
                 f"{config.seed}\0{item.row_id}".encode("utf-8")
             ).hexdigest(),
         )
-        held_out = ordered[validation_start:validation_stop]
+        ordered_by_label[label] = ordered
+        validation.extend(ordered[validation_start:validation_stop])
+
+    validation.sort(key=lambda item: item.row_id)
+    validation_split = Split("validation", tuple(validation))
+    assert_unique(validation_split)
+
+    # A separately versioned fixed-window follow-up may fill a larger training
+    # set by scanning past duplicate publisher rows. The completed default
+    # experiment keeps its original first-N selection contract unchanged.
+    selected_content = {_content_id(item.text) for item in validation}
+    train: list[Example] = []
+    for label, ordered in ordered_by_label.items():
         training_candidates = ordered[:validation_start] + ordered[validation_stop:]
-        train.extend(training_candidates[: config.train_per_class])
-        validation.extend(held_out)
+        if config.validation_start_per_class is None:
+            train.extend(training_candidates[: config.train_per_class])
+            continue
+        selected_for_class: list[Example] = []
+        for item in training_candidates:
+            content_id = _content_id(item.text)
+            if content_id in selected_content:
+                continue
+            selected_for_class.append(item)
+            selected_content.add(content_id)
+            if len(selected_for_class) == config.train_per_class:
+                break
+        if len(selected_for_class) != config.train_per_class:
+            raise ValueError(
+                f"class {label} has only {len(selected_for_class)} content-unique "
+                f"training rows; {config.train_per_class} required after reserving validation"
+            )
+        train.extend(selected_for_class)
 
     train.sort(key=lambda item: item.row_id)
-    validation.sort(key=lambda item: item.row_id)
     train_split = Split("train", tuple(train))
-    validation_split = Split("validation", tuple(validation))
+    assert_unique(train_split)
     assert_disjoint(train_split, validation_split)
     return train_split, validation_split
 
@@ -285,7 +312,7 @@ def describe(bundle: DatasetBundle, config: DataConfig) -> dict[str, Any]:
             {
                 "algorithm": (
                     "per-class SHA-256 ordering; fixed validation window; "
-                    "training excludes validation; row-ID sort"
+                    "training excludes validation and duplicate content; row-ID sort"
                 ),
                 "validation_start_per_class": config.validation_start_per_class,
             }
