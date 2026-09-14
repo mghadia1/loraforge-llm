@@ -271,6 +271,47 @@ def test_expanded_training_keeps_validation_fixed_and_adds_rows() -> None:
     )
 
 
+def test_expanded_training_replaces_duplicate_content_without_moving_validation(
+    monkeypatch,
+) -> None:
+    rows = synthetic_rows(per_class=12)
+    config = DataConfig(
+        train_per_class=6,
+        validation_per_class=2,
+        validation_start_per_class=2,
+    )
+    original_train, original_validation = deterministic_development_split(rows, config)
+    duplicate_pair = [
+        item for item in original_train.examples if item.label == 2
+    ][:2]
+    duplicate_texts = {item.text for item in duplicate_pair}
+    original_content_id = data_module._content_id
+
+    monkeypatch.setattr(
+        data_module,
+        "_content_id",
+        lambda text: (
+            "synthetic-duplicate"
+            if text in duplicate_texts
+            else original_content_id(text)
+        ),
+    )
+    deduplicated_train, deduplicated_validation = deterministic_development_split(
+        rows, config
+    )
+
+    original_ids = {item.row_id for item in original_train.examples}
+    deduplicated_ids = {item.row_id for item in deduplicated_train.examples}
+    assert deduplicated_validation.id_sha256() == original_validation.id_sha256()
+    assert deduplicated_train.class_counts() == {
+        name: 6 for name in CLASS_NAMES
+    }
+    assert len(original_ids & deduplicated_ids) == len(original_ids) - 1
+    assert len(
+        {data_module._content_id(item.text) for item in deduplicated_train.examples}
+    ) == 24
+
+
 def test_json_config_loader_preserves_expanded_split_contract(tmp_path) -> None:
     path = tmp_path / "experiment.json"
     payload = default_config().to_dict()
