@@ -6,6 +6,7 @@ from loraforge.modeling import (
     _left_pad_token_rows,
     resolve_last_logit_kwargs,
     score_class_codes,
+    validate_model_tokenizer_vocabulary,
 )
 
 
@@ -88,3 +89,62 @@ def test_unknown_model_shape_falls_back_to_computing_every_logit() -> None:
     cyclic.base_model = cyclic  # must terminate rather than loop
     assert resolve_last_logit_kwargs(cyclic) == {}
     assert resolve_last_logit_kwargs(object()) == {}
+
+
+class VocabularyTokenizer:
+    eos_token_id = 2
+    pad_token_id = 2
+
+    def __init__(self, size=15, code_ids=(11, 12, 13, 14)):
+        self.size = size
+        self.code_ids = dict(zip("ABCD", code_ids))
+
+    def __len__(self):
+        return self.size
+
+    def encode(self, value, add_special_tokens=False):
+        prompt = [1, 7, 8]
+        if value[-1:] in self.code_ids:
+            return [*prompt, self.code_ids[value[-1]]]
+        return prompt
+
+    def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        return [1, 7, 8] if tokenize else "<chat>"
+
+
+class VocabularyModel:
+    def __init__(self, *, config_size=15, input_size=15, output_size=15):
+        self.config = type("Config", (), {"vocab_size": config_size})()
+        self.input_embeddings = type("Input", (), {"num_embeddings": input_size})()
+        self.output_embeddings = type("Output", (), {"out_features": output_size})()
+
+    def get_input_embeddings(self):
+        return self.input_embeddings
+
+    def get_output_embeddings(self):
+        return self.output_embeddings
+
+
+def test_model_and_tokenizer_vocabulary_contract_accepts_aligned_ids() -> None:
+    assert validate_model_tokenizer_vocabulary(
+        VocabularyModel(), VocabularyTokenizer()
+    ) == (11, 12, 13, 14)
+
+
+@pytest.mark.parametrize(
+    ("model", "tokenizer", "message"),
+    [
+        (VocabularyModel(input_size=14), VocabularyTokenizer(), "vocabulary mismatch"),
+        (VocabularyModel(output_size=14), VocabularyTokenizer(), "vocabulary mismatch"),
+        (VocabularyModel(config_size=14), VocabularyTokenizer(), "vocabulary mismatch"),
+        (VocabularyModel(), VocabularyTokenizer(size=16), "vocabulary mismatch"),
+        (
+            VocabularyModel(),
+            VocabularyTokenizer(code_ids=(11, 12, 13, 15)),
+            "class-code token IDs",
+        ),
+    ],
+)
+def test_model_tokenizer_vocabulary_drift_is_rejected(model, tokenizer, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_model_tokenizer_vocabulary(model, tokenizer)
