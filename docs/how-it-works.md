@@ -186,6 +186,12 @@ tracked intervals evidence, so model-card generation never needs to reopen the
 publisher test split. Its public usage snippet also pins both the tokenizer and
 base-model loads to the exact model revision recorded by the run, so a later
 upstream default cannot silently change the adapter's inference base.
+Parameter counts and GPU identity are quoted only when the training report
+agrees with the separate pre-training QLoRA setup artifact. Adapter bytes are
+quoted only when the selected directory manifest matches the tracked release
+evidence. Wall-clock and peak-memory fields have no independent cross-artifact
+binding, so the generator omits them instead of trusting self-consistent edits
+to a training report.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,

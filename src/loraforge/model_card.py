@@ -8,7 +8,6 @@ not, and a run that never touched the test split cannot quote test results.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Any
 
@@ -16,37 +15,93 @@ from .provenance import EvidenceError, read_json, sha256_file
 
 
 PLACEHOLDER = "[More Information Needed]"
+QLORA_SETUP = Path("outputs/qlora-setup.json")
+RELEASE_EVIDENCE = Path("docs/evidence/selected-adapter-release.json")
 
 
-def _format_parameters(report: dict[str, Any]) -> str:
-    parameters = report.get("parameters")
+def _verified_setup_evidence(
+    root: Path, report: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Cross-check resource claims against the independent pre-training setup."""
+    path = root / QLORA_SETUP
+    if not path.exists():
+        return None
+    setup = read_json(path)
+    config = report["config"]
+    expected = {
+        "schema_version": 1,
+        "model": report["model"],
+        "model_revision": report["model_revision"],
+        "quantization": config["quantization"],
+        "lora": config["lora"],
+        "test_loaded": False,
+        "adapter_trained": False,
+    }
+    for field, value in expected.items():
+        if type(setup.get(field)) is not type(value) or setup.get(field) != value:
+            raise EvidenceError(
+                f"QLoRA setup {field} does not match the verified training run"
+            )
+
+    parameters = setup.get("parameters")
     if not isinstance(parameters, dict):
-        raise EvidenceError(
-            "training report has no audited parameters block; refusing to invent a count"
-        )
-    required = {"trainable_parameters", "trainable_percent", "total_parameters"}
-    if not required <= parameters.keys():
-        raise EvidenceError(
-            "training report parameters block is incomplete; refusing to render a model card"
-        )
-    trainable = parameters["trainable_parameters"]
-    total = parameters["total_parameters"]
-    percent = parameters["trainable_percent"]
+        raise EvidenceError("QLoRA setup has no parameter evidence")
+    trainable = parameters.get("trainable_parameters")
+    if type(trainable) is not int or trainable <= 0:
+        raise EvidenceError("QLoRA setup trainable parameter count must be a positive integer")
+    if parameters.get("only_lora_parameters_trainable") is not True:
+        raise EvidenceError("QLoRA setup does not prove that only LoRA parameters are trainable")
+
+    training_parameters = report.get("parameters")
+    if training_parameters is not None:
+        if not isinstance(training_parameters, dict):
+            raise EvidenceError("training report parameters must be an object")
+        recorded = training_parameters.get("trainable_parameters")
+        if type(recorded) is not int or recorded != trainable:
+            raise EvidenceError(
+                "training report trainable parameter count does not match QLoRA setup evidence"
+            )
+
+    environment = report.get("environment")
+    gpu_name = setup.get("gpu_name")
     if (
-        type(trainable) is not int
-        or type(total) is not int
-        or trainable <= 0
-        or total < trainable
-        or not isinstance(percent, (int, float))
-        or not math.isfinite(float(percent))
-        or float(percent) <= 0
-        or not math.isclose(float(percent), 100 * trainable / total, rel_tol=1e-6)
+        not isinstance(environment, dict)
+        or not isinstance(gpu_name, str)
+        or not gpu_name.strip()
+        or environment.get("gpu_name") != gpu_name
     ):
-        raise EvidenceError("training report parameters block is not internally consistent")
-    return (
-        f"{trainable:,} "
-        f"({float(percent):.4f}% of {total:,})"
-    )
+        raise EvidenceError(
+            "training report GPU does not match the independent QLoRA setup evidence"
+        )
+    return setup
+
+
+def _verified_release_adapter_size(
+    root: Path, report: dict[str, Any]
+) -> int | None:
+    """Return adapter bytes only when the release manifest binds this exact run."""
+    path = root / RELEASE_EVIDENCE
+    if not path.exists():
+        return None
+    release = read_json(path)
+    selection = report["selection"]
+    expected = {
+        "schema_version": 1,
+        "selected_epoch": selection["selected_epoch"],
+        "adapter_directory": selection["selected_adapter_dir"],
+        "adapter_directory_hash": selection["selected_adapter_hashes"],
+        "base_model": report["model"],
+        "base_model_revision": report["model_revision"],
+    }
+    for field, value in expected.items():
+        if type(release.get(field)) is not type(value) or release.get(field) != value:
+            raise EvidenceError(
+                f"selected-adapter release {field} does not match the verified training run"
+            )
+    adapter_bytes = release["adapter_directory_hash"].get("total_bytes")
+    if type(adapter_bytes) is not int or adapter_bytes <= 0:
+        raise EvidenceError("release adapter size must be a positive integer")
+    return adapter_bytes
 
 
 def _final_report_for_run(root: Path, report: dict[str, Any]) -> dict[str, Any] | None:
@@ -115,7 +170,7 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     final = _verified_reports_for_card(root, report)
     config = report["config"]
     lora, training, data = config["lora"], config["training"], config["data"]
-    environment = report["environment"]
+    setup = _verified_setup_evidence(root, report)
 
     selected_epoch = report["selection"]["selected_epoch"]
     from .training import select_checkpoint
@@ -126,12 +181,7 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
     validation = selected["validation"]
     base_validation = report["base_validation_metrics"]
 
-    selected_hashes = report["selection"].get("selected_adapter_hashes")
-    if not isinstance(selected_hashes, dict) or type(selected_hashes.get("total_bytes")) is not int:
-        raise EvidenceError("training report has no recorded selected-adapter size")
-    adapter_bytes = selected_hashes["total_bytes"]
-    if adapter_bytes <= 0:
-        raise EvidenceError("recorded selected-adapter size must be positive")
+    adapter_bytes = _verified_release_adapter_size(root, report)
 
     lines: list[str] = []
     add = lines.append
@@ -204,7 +254,17 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
         f"- LoRA: rank {lora['rank']}, alpha {lora['alpha']}, dropout {lora['dropout']}, "
         f"targeting {', '.join(f'`{m}`' for m in lora['target_modules'])}"
     )
-    add(f"- Trainable parameters: **{_format_parameters(report)}**")
+    if setup is not None:
+        trainable = setup["parameters"]["trainable_parameters"]
+        add(
+            f"- Trainable parameters: **{trainable:,}** (cross-checked against the "
+            "pre-training QLoRA setup; no precise percentage is claimed)"
+        )
+    else:
+        add(
+            "- Trainable-parameter and hardware claims are omitted because this run has "
+            "no matching pre-training setup evidence"
+        )
     add(
         f"- Optimization: {training['epochs']} epochs, learning rate "
         f"{training['learning_rate']}, effective batch "
@@ -215,12 +275,12 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
         "- Loss is computed **only** on the answer token and EOS; every prompt token is "
         "masked with `-100`"
     )
-    add(
-        f"- Hardware: {environment.get('gpu_name', 'unknown')}, "
-        f"{report['wall_time_seconds'] / 3600:.2f} h, peak "
-        f"{report['peak_cuda_memory_gib']:.2f} GiB CUDA"
-    )
-    add(f"- Adapter size: {adapter_bytes:,} bytes")
+    if setup is not None:
+        add(f"- Hardware: {setup['gpu_name']} (recorded by setup and training artifacts)")
+    if adapter_bytes is not None:
+        add(f"- Adapter size: {adapter_bytes:,} bytes (verified by the release manifest)")
+    else:
+        add("- Adapter-size claim omitted because no matching release manifest is present")
     add("")
 
     add("## How the class is read\n")
