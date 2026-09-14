@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+import loraforge.token_audit as token_audit_module
 from loraforge.config import default_config
 from loraforge.data import DatasetBundle, Example, Split
 from loraforge.provenance import EvidenceError
@@ -110,3 +113,80 @@ def test_token_audit_verifier_rejects_an_edited_summary() -> None:
 
     with pytest.raises(EvidenceError, match="does not match the pinned"):
         verify_token_length_audit(audit, VariableLengthTokenizer(), bundle, config)
+
+
+def test_tracked_legacy_default_audit_is_bound_to_its_canonical_digest() -> None:
+    stored = json.loads(
+        Path("docs/evidence/token-length-audit.json").read_text(encoding="utf-8")
+    )
+
+    assert (
+        token_audit_module._sha256_json(stored)
+        == token_audit_module.LEGACY_DEFAULT_AUDIT_SHA256
+    )
+    assert (
+        token_audit_module._sha256_json(default_config().to_dict())
+        == token_audit_module.LEGACY_DEFAULT_CONFIG_SHA256
+    )
+
+
+def test_legacy_default_audit_is_recomputed_without_rewriting_it(monkeypatch) -> None:
+    config = default_config()
+    bundle = DatasetBundle(
+        train=make_split("train", [1, 2]),
+        validation=make_split("validation", [3, 4], offset=2),
+    )
+    stored = {
+        "schema_version": 1,
+        "created_at_utc": "2026-01-01T00:00:00Z",
+        "model_tokenizer": config.model_name,
+        "model_revision": config.model_revision,
+        "development_rows": 4,
+        "test_loaded": False,
+        "prompt_plus_answer_tokens": {
+            "median": 7.5,
+            "p95": 9,
+            "maximum": 9,
+            "rows_over_384": 0,
+            "rows_over_512": 0,
+        },
+        "decision": (
+            "Use max_sequence_length=512 so no development article is silently truncated."
+        ),
+        "class_code_token_ids": {"A": 11, "B": 12, "C": 13, "D": 14},
+    }
+    original = json.loads(json.dumps(stored))
+    monkeypatch.setattr(
+        token_audit_module,
+        "LEGACY_DEFAULT_AUDIT_SHA256",
+        token_audit_module._sha256_json(stored),
+    )
+
+    verified = verify_token_length_audit(
+        stored, VariableLengthTokenizer(), bundle, config
+    )
+
+    assert stored == original
+    assert verified["development_rows"] == 4
+    assert verified["rows_over_max_sequence_length"] == 0
+    assert verified["safe_to_train_without_truncation"] is True
+
+
+def test_edited_legacy_default_audit_is_rejected_by_its_digest(monkeypatch) -> None:
+    stored = json.loads(
+        Path("docs/evidence/token-length-audit.json").read_text(encoding="utf-8")
+    )
+    trusted_digest = token_audit_module._sha256_json(stored)
+    stored["prompt_plus_answer_tokens"]["maximum"] = 1
+    monkeypatch.setattr(
+        token_audit_module, "LEGACY_DEFAULT_AUDIT_SHA256", trusted_digest
+    )
+    bundle = DatasetBundle(
+        train=make_split("train", [1]),
+        validation=make_split("validation", [1], offset=1),
+    )
+
+    with pytest.raises(EvidenceError, match="canonical digest"):
+        verify_token_length_audit(
+            stored, VariableLengthTokenizer(), bundle, default_config()
+        )
