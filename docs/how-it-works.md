@@ -191,7 +191,9 @@ agrees with the separate pre-training QLoRA setup artifact. Adapter bytes are
 quoted only when the selected directory manifest matches the tracked release
 evidence. Wall-clock and peak-memory fields have no independent cross-artifact
 binding, so the generator omits them instead of trusting self-consistent edits
-to a training report.
+to a training report. The completed historical training report has no audited
+parameter block, so its generated public card also omits the trainable-parameter
+count rather than trusting the setup artifact by itself.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,

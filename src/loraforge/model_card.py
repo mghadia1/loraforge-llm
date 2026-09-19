@@ -254,11 +254,17 @@ def build_model_card(*, root: Path = Path("."), repo_url: str | None = None) -> 
         f"- LoRA: rank {lora['rank']}, alpha {lora['alpha']}, dropout {lora['dropout']}, "
         f"targeting {', '.join(f'`{m}`' for m in lora['target_modules'])}"
     )
-    if setup is not None:
+    training_parameters = report.get("parameters")
+    if setup is not None and isinstance(training_parameters, dict):
         trainable = setup["parameters"]["trainable_parameters"]
         add(
             f"- Trainable parameters: **{trainable:,}** (cross-checked against the "
             "pre-training QLoRA setup; no precise percentage is claimed)"
+        )
+    elif setup is not None:
+        add(
+            "- Trainable-parameter claim omitted because the completed training report "
+            "has no matching audited parameter block"
         )
     else:
         add(

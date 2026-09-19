@@ -197,14 +197,21 @@ def test_writing_the_card_never_touches_the_adapter_directory(tmp_path) -> None:
     assert sha256_directory(adapter)["combined_sha256"] == before
 
 
-def test_historical_parameter_count_can_come_from_matching_setup_evidence(tmp_path) -> None:
+def test_historical_setup_alone_cannot_publish_a_parameter_count(tmp_path) -> None:
     make_run(tmp_path)
-    path = tmp_path / "outputs" / "training-report.json"
-    report = json.loads(path.read_text())
+    report_path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(report_path.read_text())
     del report["parameters"]
-    write_json(report, path)
+    write_json(report, report_path)
+
+    setup_path = tmp_path / "outputs" / "qlora-setup.json"
+    setup = json.loads(setup_path.read_text())
+    setup["parameters"]["trainable_parameters"] = 1
+    write_json(setup, setup_path)
+
     card = build_model_card(root=tmp_path)
-    assert "Trainable parameters: **10,485,760**" in card
+    assert "Trainable parameters: **" not in card
+    assert "no matching audited parameter block" in card
 
 
 def test_unverified_resource_claims_are_not_published(tmp_path) -> None:
@@ -253,6 +260,17 @@ def test_resource_claims_must_match_independent_evidence(
     write_json(report, path)
 
     with pytest.raises(EvidenceError, match=message):
+        build_model_card(root=tmp_path)
+
+
+def test_setup_parameter_count_must_match_the_training_report(tmp_path) -> None:
+    make_run(tmp_path)
+    path = tmp_path / "outputs" / "qlora-setup.json"
+    setup = json.loads(path.read_text())
+    setup["parameters"]["trainable_parameters"] = 1
+    write_json(setup, path)
+
+    with pytest.raises(EvidenceError, match="parameter count"):
         build_model_card(root=tmp_path)
 
 
