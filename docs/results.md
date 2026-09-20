@@ -52,28 +52,26 @@ The largest change was Sci/Tech recall: 0.3574 for the base system versus
 0.8916 after adaptation. The base model often mapped Sci/Tech articles to
 Business; QLoRA substantially reduced that error mode.
 
-## Runtime and artifact measurements
+## Resource and artifact evidence
 
 - Hardware: Tesla T4, CUDA 12.8.
-- Training: 13,083.95 seconds (about 3 hours 38 minutes) for two epochs.
-- Training report peak CUDA allocation: 5.77 GiB.
-- Phase-one model/setup peak CUDA allocation: 12.34 GiB.
 - Base test scoring: 1,248.92 seconds (20 minutes 49 seconds).
 - Tuned test scoring: 1,477.03 seconds (24 minutes 37 seconds).
 - Selected adapter: 167,838,575 bytes.
-- Trainable LoRA weights: 41,943,040.
 
 The first phase-one setup artifact reports a misleading 1.1037% trainable
 percentage because bitsandbytes' packed `Params4bit.numel()` undercounts the
 base denominator; the code and tests now reject that packed count. The original
 artifact remains unchanged as part of the audit trail.
 
-**The measured quantity is the numerator: 41,943,040 trainable adapter
-parameters — roughly 0.6% of a 7B model.** No artifact in this repository
-records the unpacked denominator, so a precise percentage would rest on
-Mistral's published parameter count rather than on something measured here.
-`parameter_report` now runs inside training and will record the audited count
-directly on the next run.
+The completed training report has no audited parameter block, so the setup
+artifact alone is not used to publish a trainable-parameter count. Training
+duration and peak-memory values are likewise omitted from the public result
+because each exists only in one mutable run report. `parameter_report` now runs
+inside training and will record an independently checkable count on the next
+run. The GPU identity is cross-checked between setup and training evidence,
+test-scoring durations are covered by the final report's hash binding, and the
+adapter size is checked against the release manifest.
 
 ## Uncertainty of the measured gap
 
@@ -109,12 +107,11 @@ alpha with it so the `alpha/rank` update scaling stayed fixed.
 | | rank 16 | rank 4 |
 |---|---:|---:|
 | validation macro-F1 | 0.9310 | 0.9360 |
-| trainable parameters | 41,943,040 (0.578%) | 10,485,760 (0.1445%) |
 | adapter bytes | 167,838,575 | 42,008,469 |
 
 The difference is **+0.0050 with a 95% CI of [-0.0023, +0.0122]** and McNemar p = 0.220,
 so the two are statistically indistinguishable: **equal quality at a quarter of the
-trainable parameters**, not a rank-4 win. Validation only; the test split was not used.
+adapter size**, not a rank-4 win. Validation only; the test split was not used.
 
 ## Evidence trail
 

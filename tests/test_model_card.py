@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -227,6 +228,30 @@ def test_unverified_resource_claims_are_not_published(tmp_path) -> None:
     assert "0.00 GiB" not in card
     assert "14,487.9" not in card
     assert "5.48 GiB" not in card
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "docs/results.md",
+        "docs/STATUS.md",
+        "docs/how-it-works.md",
+        "docs/LEARNING_GUIDE.md",
+    ],
+)
+def test_primary_public_docs_omit_uncorroborated_training_resources(
+    relative_path,
+) -> None:
+    text = (Path(__file__).parents[1] / relative_path).read_text()
+    for unsupported_claim in (
+        "13,083.95",
+        "3 hours 38 minutes",
+        "5.77 GiB",
+        "12.34 GiB",
+        "41,943,040",
+        "roughly 0.6%",
+    ):
+        assert unsupported_claim not in text
 
 
 def test_missing_independent_evidence_omits_resource_claims(tmp_path) -> None:
