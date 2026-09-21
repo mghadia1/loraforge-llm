@@ -164,6 +164,11 @@ An explicit `verify --training-only` scope ignores existing final-test and
 interval artifacts, loads publisher train only, and verifies the validation
 metrics, checkpoint selection, and adapter manifests without requesting the
 publisher test split.
+`compare-runs --strict` applies that same reports-only training verification to
+each run against its own evidence root before it emits a comparison. It also
+reconstructs both validation selections from the pinned publisher-train split
+and requires their ordered row-ID digests to match; equal label sequences alone
+cannot make different validation articles look controlled.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model

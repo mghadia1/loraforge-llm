@@ -71,9 +71,10 @@ this arm and must not be used.
 
 Run August 18, 2026 on a Colab Tesla T4. `loraforge compare-runs --strict` confirms
 the comparison is controlled: identical library stack, same GPU model, the same
-validation-label digest, and the only config differences are the two under test
-plus the removed test budget. The command reapplies the checkpoint-selection rule
-and reports the selected epochs rather than the maximum metric in isolation.
+exact ordered validation rows, and the only config differences are the two under
+test plus the removed test budget. Before emitting the comparison, strict mode
+hash-checks each run's logits, recomputes its complete validation metrics, and
+reapplies the checkpoint-selection rule.
 
 | | rank 16 | rank 4 |
 |---|---:|---:|

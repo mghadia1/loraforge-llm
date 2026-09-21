@@ -177,11 +177,14 @@ def main() -> int:
         from .compare import compare_report_files, require_controlled
 
         comparison = compare_report_files(
-            args.baseline, args.variant, expected_config_changes=set(args.expect_change)
+            args.baseline,
+            args.variant,
+            expected_config_changes=set(args.expect_change),
+            verify_evidence=args.strict,
         )
         print(json.dumps(comparison, indent=2))
         if args.strict:
-            require_controlled(comparison)
+            require_controlled(comparison, require_verified_evidence=True)
         return 0
 
     if args.command == "model-card":

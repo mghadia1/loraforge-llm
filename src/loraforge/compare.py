@@ -71,6 +71,8 @@ def compare_runs(
     variant: dict[str, Any],
     *,
     expected_config_changes: set[str] | None = None,
+    validation_row_ids_sha256: tuple[str, str] | None = None,
+    evidence_verified: bool = False,
 ) -> dict[str, Any]:
     """Diff two training reports and judge whether the comparison is controlled."""
     expected = expected_config_changes or set()
@@ -94,10 +96,20 @@ def compare_runs(
         baseline.get("validation_label_sha256"),
         variant.get("validation_label_sha256"),
     ]
-    validation_data_matches = (
+    validation_labels_match = (
         isinstance(validation_hashes[0], str)
         and validation_hashes[0]
         and validation_hashes[0] == validation_hashes[1]
+    )
+    validation_row_hashes = list(validation_row_ids_sha256 or (None, None))
+    validation_rows_match = (
+        validation_row_ids_sha256 is not None
+        and isinstance(validation_row_hashes[0], str)
+        and bool(validation_row_hashes[0])
+        and validation_row_hashes[0] == validation_row_hashes[1]
+    )
+    validation_data_matches = validation_labels_match and (
+        validation_rows_match if evidence_verified else True
     )
     controlled = (
         not blocking_packages
@@ -111,6 +123,7 @@ def compare_runs(
     variant_best = _selected_macro_f1(variant, "variant")
     return {
         "controlled": controlled,
+        "evidence_verified": evidence_verified,
         "package_differences": package_drift,
         "blocking_package_differences": blocking_packages,
         "config_differences": config_drift,
@@ -119,6 +132,9 @@ def compare_runs(
         "gpu": gpu,
         "gpu_matches": gpu_matches,
         "validation_label_sha256": validation_hashes,
+        "validation_labels_match": validation_labels_match,
+        "validation_row_ids_sha256": validation_row_hashes,
+        "validation_rows_match": validation_rows_match,
         "validation_data_matches": validation_data_matches,
         "selected_epoch": {
             "baseline": baseline["selection"]["selected_epoch"],
@@ -140,11 +156,17 @@ def compare_runs(
     }
 
 
-def require_controlled(comparison: dict[str, Any]) -> None:
+def require_controlled(
+    comparison: dict[str, Any], *, require_verified_evidence: bool = False
+) -> None:
     """Raise unless the only thing that changed is what the ablation meant to change."""
-    if comparison["controlled"]:
+    if comparison["controlled"] and (
+        comparison.get("evidence_verified") or not require_verified_evidence
+    ):
         return
     reasons = []
+    if require_verified_evidence and not comparison.get("evidence_verified"):
+        reasons.append("training metrics, logits, and validation row identities were not verified")
     if comparison["blocking_package_differences"]:
         reasons.append(f"library versions changed: {comparison['blocking_package_differences']}")
     if comparison["unexpected_config_differences"]:
@@ -157,8 +179,9 @@ def require_controlled(comparison: dict[str, Any]) -> None:
         reasons.append(f"GPU model changed or is missing: {comparison['gpu']}")
     if not comparison["validation_data_matches"]:
         reasons.append(
-            "validation label digest changed or is missing: "
-            f"{comparison['validation_label_sha256']}"
+            "validation labels or exact row identities changed or are missing: "
+            f"labels={comparison['validation_label_sha256']}, "
+            f"rows={comparison['validation_row_ids_sha256']}"
         )
     raise EvidenceError(
         "this comparison is not controlled, so a difference cannot be attributed to the "
@@ -167,10 +190,47 @@ def require_controlled(comparison: dict[str, Any]) -> None:
 
 
 def compare_report_files(
-    baseline_path: Path, variant_path: Path, *, expected_config_changes: set[str] | None = None
+    baseline_path: Path,
+    variant_path: Path,
+    *,
+    expected_config_changes: set[str] | None = None,
+    verify_evidence: bool = False,
 ) -> dict[str, Any]:
+    baseline_path = Path(baseline_path)
+    variant_path = Path(variant_path)
+    baseline = read_json(baseline_path)
+    variant = read_json(variant_path)
+    row_hashes = None
+    if verify_evidence:
+        from .data import load_dataset
+        from .selection import training_report_config, verify_training_report
+
+        verified_rows = []
+        for name, path, report in (
+            ("baseline", baseline_path, baseline),
+            ("variant", variant_path, variant),
+        ):
+            if path.name != "training-report.json" or path.parent.name != "outputs":
+                raise EvidenceError(
+                    f"{name} report must be an outputs/training-report.json path so its "
+                    "evidence root can be determined"
+                )
+            root = path.parent.parent
+            config = training_report_config(report)
+            bundle = load_dataset(allow_test=False, config=config.data)
+            verify_training_report(
+                report,
+                root=root,
+                labels=bundle.validation.labels,
+                verify_adapters=False,
+            )
+            verified_rows.append(bundle.validation.id_sha256())
+        row_hashes = (verified_rows[0], verified_rows[1])
+
     return compare_runs(
-        read_json(baseline_path),
-        read_json(variant_path),
+        baseline,
+        variant,
         expected_config_changes=expected_config_changes,
+        validation_row_ids_sha256=row_hashes,
+        evidence_verified=verify_evidence,
     )

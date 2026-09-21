@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from loraforge.compare import compare_runs, require_controlled
+from loraforge.compare import compare_report_files, compare_runs, require_controlled
 from loraforge.data import (
     Example,
     Split,
@@ -211,8 +211,119 @@ def test_different_validation_rows_block_the_controlled_comparison() -> None:
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
     assert comparison["controlled"] is False
-    with pytest.raises(EvidenceError, match="validation label digest"):
+    with pytest.raises(EvidenceError, match="validation labels"):
         require_controlled(comparison)
+
+
+def test_verified_comparison_requires_exact_validation_row_identity() -> None:
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        report(STACK, 4, 0.9295),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        validation_row_ids_sha256=("baseline-rows", "variant-rows"),
+        evidence_verified=True,
+    )
+    assert comparison["validation_labels_match"] is True
+    assert comparison["validation_rows_match"] is False
+    assert comparison["controlled"] is False
+    with pytest.raises(EvidenceError, match="exact row identities"):
+        require_controlled(comparison, require_verified_evidence=True)
+
+
+def test_strict_file_comparison_verifies_both_reports_and_row_ids(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+    from dataclasses import replace
+
+    from loraforge.config import default_config
+
+    roots = [tmp_path / "baseline", tmp_path / "variant"]
+    reports = [report(STACK, 16, 0.9310), report(STACK, 4, 0.9295)]
+    configs = [
+        default_config(),
+        replace(
+            default_config(),
+            lora=replace(default_config().lora, rank=4, alpha=8),
+            test_evaluations_allowed=0,
+        ),
+    ]
+    paths = []
+    for root, stored, config in zip(roots, reports, configs):
+        stored["config"] = config.to_dict()
+        path = root / "outputs" / "training-report.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        paths.append(path)
+
+    bundles = {
+        16: DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+        4: DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+    }
+    verified = []
+
+    loaded = iter((bundles[16], bundles[4]))
+    monkeypatch.setattr(
+        "loraforge.data.load_dataset",
+        lambda *, allow_test, config: next(loaded),
+    )
+    monkeypatch.setattr(
+        "loraforge.selection.verify_training_report",
+        lambda stored, *, root, labels, verify_adapters: verified.append(
+            (root, labels, verify_adapters)
+        ),
+    )
+
+    comparison = compare_report_files(
+        paths[0],
+        paths[1],
+        expected_config_changes={"lora.rank", "lora.alpha", "test_evaluations_allowed"},
+        verify_evidence=True,
+    )
+
+    assert comparison["controlled"] is True
+    assert comparison["evidence_verified"] is True
+    assert comparison["validation_rows_match"] is True
+    assert verified == [
+        (roots[0], bundles[16].validation.labels, False),
+        (roots[1], bundles[4].validation.labels, False),
+    ]
+
+
+def test_strict_file_comparison_stops_on_unverified_metrics(tmp_path, monkeypatch) -> None:
+    import json
+
+    from loraforge.config import default_config
+
+    paths = []
+    for name, rank in (("baseline", 16), ("variant", 4)):
+        stored = report(STACK, rank, 0.9999)
+        stored["config"] = default_config().to_dict()
+        path = tmp_path / name / "outputs" / "training-report.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        paths.append(path)
+
+    bundle = DatasetBundle(
+        train=split("train", range(0, 4)),
+        validation=split("validation", range(10, 14)),
+    )
+    monkeypatch.setattr("loraforge.data.load_dataset", lambda **kwargs: bundle)
+    monkeypatch.setattr(
+        "loraforge.selection.verify_training_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            EvidenceError("selected validation macro-F1 disagrees with its own logits")
+        ),
+    )
+
+    with pytest.raises(EvidenceError, match="own logits"):
+        compare_report_files(paths[0], paths[1], verify_evidence=True)
 
 
 def test_reported_metric_comes_from_the_rule_selected_epoch() -> None:
