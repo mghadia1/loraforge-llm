@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -69,6 +70,34 @@ def make_run(tmp_path, *, macro_f1=0.9360, rank=4, with_test=False):
         },
         tmp_path / "outputs" / "training-report.json",
     )
+    write_json(
+        {
+            "schema_version": 1,
+            "model": config["model_name"],
+            "model_revision": config["model_revision"],
+            "quantization": config["quantization"],
+            "lora": config["lora"],
+            "gpu_name": "Tesla T4",
+            "parameters": {
+                "trainable_parameters": 10_485_760,
+                "only_lora_parameters_trainable": True,
+            },
+            "test_loaded": False,
+            "adapter_trained": False,
+        },
+        tmp_path / "outputs" / "qlora-setup.json",
+    )
+    write_json(
+        {
+            "schema_version": 1,
+            "selected_epoch": 2,
+            "adapter_directory": "adapters/selected",
+            "adapter_directory_hash": adapter_hashes,
+            "base_model": config["model_name"],
+            "base_model_revision": config["model_revision"],
+        },
+        tmp_path / "docs" / "evidence" / "selected-adapter-release.json",
+    )
     if with_test:
         final_path = tmp_path / "outputs" / "final-test-report.json"
         write_json(
@@ -123,7 +152,7 @@ def test_the_card_reports_the_run_it_was_generated_from(tmp_path) -> None:
     card = build_model_card(root=tmp_path)
     assert "0.8123" in card
     assert "rank-8 QLoRA adapter" in card
-    assert "10,485,760" in card and "0.1445%" in card
+    assert "10,485,760" in card and "no precise percentage is claimed" in card
 
 
 def test_usage_pins_the_recorded_base_and_tokenizer_revision(tmp_path) -> None:
@@ -169,13 +198,104 @@ def test_writing_the_card_never_touches_the_adapter_directory(tmp_path) -> None:
     assert sha256_directory(adapter)["combined_sha256"] == before
 
 
-def test_missing_parameter_measurement_is_refused(tmp_path) -> None:
+def test_historical_setup_alone_cannot_publish_a_parameter_count(tmp_path) -> None:
+    make_run(tmp_path)
+    report_path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(report_path.read_text())
+    del report["parameters"]
+    write_json(report, report_path)
+
+    setup_path = tmp_path / "outputs" / "qlora-setup.json"
+    setup = json.loads(setup_path.read_text())
+    setup["parameters"]["trainable_parameters"] = 1
+    write_json(setup, setup_path)
+
+    card = build_model_card(root=tmp_path)
+    assert "Trainable parameters: **" not in card
+    assert "no matching audited parameter block" in card
+
+
+def test_unverified_resource_claims_are_not_published(tmp_path) -> None:
     make_run(tmp_path)
     path = tmp_path / "outputs" / "training-report.json"
     report = json.loads(path.read_text())
-    del report["parameters"]
+    report["wall_time_seconds"] = 0.001
+    report["peak_cuda_memory_gib"] = 0.001
     write_json(report, path)
-    with pytest.raises(EvidenceError, match="refusing to invent"):
+
+    card = build_model_card(root=tmp_path)
+    assert "0.00 h" not in card
+    assert "0.00 GiB" not in card
+    assert "14,487.9" not in card
+    assert "5.48 GiB" not in card
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "docs/results.md",
+        "docs/STATUS.md",
+        "docs/how-it-works.md",
+        "docs/LEARNING_GUIDE.md",
+    ],
+)
+def test_primary_public_docs_omit_uncorroborated_training_resources(
+    relative_path,
+) -> None:
+    text = (Path(__file__).parents[1] / relative_path).read_text()
+    for unsupported_claim in (
+        "13,083.95",
+        "3 hours 38 minutes",
+        "5.77 GiB",
+        "12.34 GiB",
+        "41,943,040",
+        "roughly 0.6%",
+    ):
+        assert unsupported_claim not in text
+
+
+def test_missing_independent_evidence_omits_resource_claims(tmp_path) -> None:
+    make_run(tmp_path)
+    (tmp_path / "outputs" / "qlora-setup.json").unlink()
+    (tmp_path / "docs" / "evidence" / "selected-adapter-release.json").unlink()
+
+    card = build_model_card(root=tmp_path)
+    assert "Trainable parameters: **" not in card
+    assert "Hardware: Tesla T4" not in card
+    assert "Adapter size:" not in card
+    assert "Trainable-parameter and hardware claims are omitted" in card
+    assert "Adapter-size claim omitted" in card
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "replacement", "message"),
+    [
+        ("parameters", "trainable_parameters", 1, "parameter count"),
+        ("environment", "gpu_name", "Imaginary H100", "GPU"),
+        ("selection", "selected_adapter_hashes", {"total_bytes": 1}, "release"),
+    ],
+)
+def test_resource_claims_must_match_independent_evidence(
+    tmp_path, section, field, replacement, message
+) -> None:
+    make_run(tmp_path)
+    path = tmp_path / "outputs" / "training-report.json"
+    report = json.loads(path.read_text())
+    report[section][field] = replacement
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match=message):
+        build_model_card(root=tmp_path)
+
+
+def test_setup_parameter_count_must_match_the_training_report(tmp_path) -> None:
+    make_run(tmp_path)
+    path = tmp_path / "outputs" / "qlora-setup.json"
+    setup = json.loads(path.read_text())
+    setup["parameters"]["trainable_parameters"] = 1
+    write_json(setup, path)
+
+    with pytest.raises(EvidenceError, match="parameter count"):
         build_model_card(root=tmp_path)
 
 

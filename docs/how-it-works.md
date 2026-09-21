@@ -85,11 +85,12 @@ work starts. Missing and unexpected fields are rejected instead of inheriting
 silent dataclass defaults, JSON booleans cannot stand in for integer counts,
 and every nested object and target-module array keeps its declared shape.
 
-The completed run used a Tesla T4. The phase-one setup reached 12.34 GiB peak
-CUDA allocation; the training report records 5.77 GiB peak after its own memory
-reset. The selected adapter contains 41,943,040 trainable LoRA weights and is
-167,838,575 bytes on disk. The original setup artifact's packed-4-bit
-denominator error is preserved and explained in `results.md`.
+The completed run's Tesla T4 identity is cross-checked between setup and
+training evidence, and the selected adapter's 167,838,575-byte size is checked
+against the release manifest. Training duration, peak memory, and the
+setup-only trainable-parameter count are not republished because the completed
+training report does not independently bind them. The original setup artifact's
+packed-4-bit denominator error is preserved and explained in `results.md`.
 
 ## Evaluation boundary
 
@@ -186,6 +187,14 @@ tracked intervals evidence, so model-card generation never needs to reopen the
 publisher test split. Its public usage snippet also pins both the tokenizer and
 base-model loads to the exact model revision recorded by the run, so a later
 upstream default cannot silently change the adapter's inference base.
+Parameter counts and GPU identity are quoted only when the training report
+agrees with the separate pre-training QLoRA setup artifact. Adapter bytes are
+quoted only when the selected directory manifest matches the tracked release
+evidence. Wall-clock and peak-memory fields have no independent cross-artifact
+binding, so the generator omits them instead of trusting self-consistent edits
+to a training report. The completed historical training report has no audited
+parameter block, so its generated public card also omits the trainable-parameter
+count rather than trusting the setup artifact by itself.
 
 The schema-v2 intervals report is also bound to the exact final-report SHA-256.
 Verification recomputes its entire deterministic tree, including the scope,

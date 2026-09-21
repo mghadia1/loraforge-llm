@@ -12,8 +12,8 @@ not the gate. The gate is being able to defend the work in an interview.
 - Test accuracy: 0.7428 to 0.9333.
 - Tuned test ECE: 0.0290 before validation-fitted temperature scaling and
   0.0078 after.
-- Two-epoch T4 training time: about 3 hours 38 minutes.
-- Selected adapter: 167,838,575 bytes; 41,943,040 trainable LoRA weights.
+- Hardware: Tesla T4, cross-checked between setup and training evidence.
+- Selected adapter: 167,838,575 bytes, checked against the release manifest.
 
 Memorizing these values is insufficient. You must connect each number to the
 artifact that produced it and explain why the protocol makes the comparison
