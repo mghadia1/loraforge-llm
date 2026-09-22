@@ -254,6 +254,18 @@ def test_primary_public_docs_omit_uncorroborated_training_resources(
         assert unsupported_claim not in text
 
 
+def test_tracked_rank4_card_matches_the_current_evidence_policy() -> None:
+    root = Path(__file__).parents[1] / "runs" / "rank4"
+    tracked = (root / "outputs" / "model-card.md").read_text(encoding="utf-8")
+
+    generated = build_model_card(
+        root=root,
+        repo_url="https://github.com/mghadia1/loraforge-llm",
+    )
+
+    assert tracked == generated
+
+
 def test_missing_independent_evidence_omits_resource_claims(tmp_path) -> None:
     make_run(tmp_path)
     (tmp_path / "outputs" / "qlora-setup.json").unlink()
