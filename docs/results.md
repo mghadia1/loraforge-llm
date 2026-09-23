@@ -107,11 +107,13 @@ alpha with it so the `alpha/rank` update scaling stayed fixed.
 | | rank 16 | rank 4 |
 |---|---:|---:|
 | validation macro-F1 | 0.9310 | 0.9360 |
-| adapter bytes | 167,838,575 | 42,008,469 |
 
 The difference is **+0.0050 with a 95% CI of [-0.0023, +0.0122]** and McNemar p = 0.220,
-so the two are statistically indistinguishable: **equal quality at a quarter of the
-adapter size**, not a rank-4 win. Validation only; the test split was not used.
+so the two are statistically indistinguishable: **equal validation quality at
+one quarter of the LoRA rank setting**, not a rank-4 win. Parameter counts,
+adapter bytes, runtime, and memory are omitted from this comparison because the
+pair has no independent evidence binding those resource values. Validation only;
+the test split was not used.
 
 ## Evidence trail
 

@@ -145,14 +145,16 @@ def compare_runs(
             "variant": variant_best,
             "delta": variant_best - baseline_best,
         },
-        "trainable_parameters": {
-            "baseline": baseline.get("parameters", {}).get("trainable_parameters"),
-            "variant": variant.get("parameters", {}).get("trainable_parameters"),
-        },
-        "wall_time_seconds": {
-            "baseline": baseline.get("wall_time_seconds"),
-            "variant": variant.get("wall_time_seconds"),
-        },
+        # Strict mode verifies the validation/logit chain, not mutable resource
+        # measurements copied into each training report. Keep those values out
+        # of the comparison output rather than giving them the appearance of
+        # independently verified evidence.
+        "resource_claims_omitted": [
+            "trainable_parameters",
+            "wall_time_seconds",
+            "peak_cuda_memory_gib",
+            "adapter_bytes",
+        ],
     }
 
 

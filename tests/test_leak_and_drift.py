@@ -161,6 +161,34 @@ def test_a_clean_rank_ablation_is_controlled() -> None:
     require_controlled(comparison)
 
 
+def test_comparison_omits_unbound_resource_claims() -> None:
+    baseline = report(STACK, 16, 0.9310)
+    variant = report(STACK, 4, 0.9295)
+    baseline.update(wall_time_seconds=0.001, peak_cuda_memory_gib=0.001)
+    variant.update(wall_time_seconds=999_999, peak_cuda_memory_gib=999_999)
+    baseline["parameters"]["trainable_parameters"] = 1
+    variant["parameters"]["trainable_parameters"] = 2
+    baseline["selection"]["selected_adapter_hashes"] = {"total_bytes": 3}
+    variant["selection"]["selected_adapter_hashes"] = {"total_bytes": 4}
+
+    comparison = compare_runs(
+        baseline,
+        variant,
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+
+    assert comparison["controlled"] is True
+    assert comparison["resource_claims_omitted"] == [
+        "trainable_parameters",
+        "wall_time_seconds",
+        "peak_cuda_memory_gib",
+        "adapter_bytes",
+    ]
+    serialized = repr(comparison)
+    for fabricated in ("999999", "'total_bytes': 3", "'total_bytes': 4"):
+        assert fabricated not in serialized
+
+
 def test_missing_field_cannot_collide_with_its_display_marker() -> None:
     from loraforge.compare import MISSING, differences
 

@@ -168,7 +168,10 @@ publisher test split.
 each run against its own evidence root before it emits a comparison. It also
 reconstructs both validation selections from the pinned publisher-train split
 and requires their ordered row-ID digests to match; equal label sequences alone
-cannot make different validation articles look controlled.
+cannot make different validation articles look controlled. The comparison
+intentionally omits parameter counts, adapter bytes, wall time, and peak memory:
+those resource values are copied from mutable run reports and are not
+independently bound for both sides of the historical rank comparison.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
