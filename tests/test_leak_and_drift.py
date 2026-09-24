@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from loraforge.compare import compare_runs, require_controlled
+from loraforge.compare import (
+    compare_report_files,
+    compare_runs,
+    require_strict_comparison,
+)
 from loraforge.data import (
     Example,
     Split,
@@ -150,15 +154,62 @@ def report(packages: dict, rank: int, macro_f1: float, gpu: str = "Tesla T4") ->
 STACK = {"transformers": "5.13.1", "peft": "0.19.1", "torch": "2.11.0+cu128"}
 
 
-def test_a_clean_rank_ablation_is_controlled() -> None:
+def test_matching_recorded_controls_allow_comparison() -> None:
     comparison = compare_runs(
         report(STACK, 16, 0.9310),
         report(STACK, 4, 0.9295),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert comparison["validation_macro_f1"]["delta"] == pytest.approx(-0.0015)
-    require_controlled(comparison)
+    require_strict_comparison(comparison)
+
+
+def test_self_reported_controls_are_not_marked_independently_verified() -> None:
+    fabricated = {name: "0.0-fabricated" for name in STACK}
+    comparison = compare_runs(
+        report(fabricated, 16, 0.9310, gpu="Imaginary H100"),
+        report(fabricated, 4, 0.9295, gpu="Imaginary H100"),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        validation_row_ids_sha256=("same-rows", "same-rows"),
+        evidence_verified=True,
+    )
+
+    assert comparison["recorded_controls_match"] is True
+    assert comparison["control_evidence"] == {
+        "source": "self_reported_training_reports",
+        "independently_verified": False,
+        "fields": ["config", "gpu", "packages"],
+    }
+    assert "controlled" not in comparison
+
+
+def test_comparison_omits_unbound_resource_claims() -> None:
+    baseline = report(STACK, 16, 0.9310)
+    variant = report(STACK, 4, 0.9295)
+    baseline.update(wall_time_seconds=0.001, peak_cuda_memory_gib=0.001)
+    variant.update(wall_time_seconds=999_999, peak_cuda_memory_gib=999_999)
+    baseline["parameters"]["trainable_parameters"] = 1
+    variant["parameters"]["trainable_parameters"] = 2
+    baseline["selection"]["selected_adapter_hashes"] = {"total_bytes": 3}
+    variant["selection"]["selected_adapter_hashes"] = {"total_bytes": 4}
+
+    comparison = compare_runs(
+        baseline,
+        variant,
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+
+    assert comparison["recorded_controls_match"] is True
+    assert comparison["resource_claims_omitted"] == [
+        "trainable_parameters",
+        "wall_time_seconds",
+        "peak_cuda_memory_gib",
+        "adapter_bytes",
+    ]
+    serialized = repr(comparison)
+    for fabricated in ("999999", "'total_bytes': 3", "'total_bytes': 4"):
+        assert fabricated not in serialized
 
 
 def test_missing_field_cannot_collide_with_its_display_marker() -> None:
@@ -174,9 +225,9 @@ def test_a_changed_library_version_blocks_the_comparison() -> None:
         report(drifted, 4, 0.8500),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="library versions changed"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_a_different_host_torch_is_reported_but_not_blocking() -> None:
@@ -187,22 +238,22 @@ def test_a_different_host_torch_is_reported_but_not_blocking() -> None:
         report(other, 4, 0.9295),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert "torch" in comparison["package_differences"]
 
 
-def test_a_different_gpu_blocks_the_controlled_comparison() -> None:
+def test_a_different_gpu_blocks_the_strict_comparison() -> None:
     comparison = compare_runs(
         report(STACK, 16, 0.9310, gpu="Tesla T4"),
         report(STACK, 4, 0.9295, gpu="A100"),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="GPU model changed"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
-def test_different_validation_rows_block_the_controlled_comparison() -> None:
+def test_different_validation_rows_block_the_strict_comparison() -> None:
     variant = report(STACK, 4, 0.9295)
     variant["validation_label_sha256"] = "different-validation-labels"
     comparison = compare_runs(
@@ -210,9 +261,121 @@ def test_different_validation_rows_block_the_controlled_comparison() -> None:
         variant,
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
-    with pytest.raises(EvidenceError, match="validation label digest"):
-        require_controlled(comparison)
+    assert comparison["recorded_controls_match"] is False
+    with pytest.raises(EvidenceError, match="validation labels"):
+        require_strict_comparison(comparison)
+
+
+def test_verified_comparison_requires_exact_validation_row_identity() -> None:
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        report(STACK, 4, 0.9295),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        validation_row_ids_sha256=("baseline-rows", "variant-rows"),
+        evidence_verified=True,
+    )
+    assert comparison["validation_labels_match"] is True
+    assert comparison["validation_rows_match"] is False
+    assert comparison["recorded_controls_match"] is False
+    with pytest.raises(EvidenceError, match="exact row identities"):
+        require_strict_comparison(comparison, require_verified_evidence=True)
+
+
+def test_strict_file_comparison_verifies_both_reports_and_row_ids(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+    from dataclasses import replace
+
+    from loraforge.config import default_config
+
+    roots = [tmp_path / "baseline", tmp_path / "variant"]
+    reports = [report(STACK, 16, 0.9310), report(STACK, 4, 0.9295)]
+    configs = [
+        default_config(),
+        replace(
+            default_config(),
+            lora=replace(default_config().lora, rank=4, alpha=8),
+            test_evaluations_allowed=0,
+        ),
+    ]
+    paths = []
+    for root, stored, config in zip(roots, reports, configs):
+        stored["config"] = config.to_dict()
+        path = root / "outputs" / "training-report.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        paths.append(path)
+
+    bundles = {
+        16: DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+        4: DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+    }
+    verified = []
+
+    loaded = iter((bundles[16], bundles[4]))
+    monkeypatch.setattr(
+        "loraforge.data.load_dataset",
+        lambda *, allow_test, config: next(loaded),
+    )
+    monkeypatch.setattr(
+        "loraforge.selection.verify_training_report",
+        lambda stored, *, root, labels, verify_adapters: verified.append(
+            (root, labels, verify_adapters)
+        ),
+    )
+
+    comparison = compare_report_files(
+        paths[0],
+        paths[1],
+        expected_config_changes={"lora.rank", "lora.alpha", "test_evaluations_allowed"},
+        verify_evidence=True,
+    )
+
+    assert comparison["recorded_controls_match"] is True
+    assert comparison["evidence_verified"] is True
+    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["validation_rows_match"] is True
+    assert verified == [
+        (roots[0], bundles[16].validation.labels, False),
+        (roots[1], bundles[4].validation.labels, False),
+    ]
+
+
+def test_strict_file_comparison_stops_on_unverified_metrics(tmp_path, monkeypatch) -> None:
+    import json
+
+    from loraforge.config import default_config
+
+    paths = []
+    for name, rank in (("baseline", 16), ("variant", 4)):
+        stored = report(STACK, rank, 0.9999)
+        stored["config"] = default_config().to_dict()
+        path = tmp_path / name / "outputs" / "training-report.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        paths.append(path)
+
+    bundle = DatasetBundle(
+        train=split("train", range(0, 4)),
+        validation=split("validation", range(10, 14)),
+    )
+    monkeypatch.setattr("loraforge.data.load_dataset", lambda **kwargs: bundle)
+    monkeypatch.setattr(
+        "loraforge.selection.verify_training_report",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            EvidenceError("selected validation macro-F1 disagrees with its own logits")
+        ),
+    )
+
+    with pytest.raises(EvidenceError, match="own logits"):
+        compare_report_files(paths[0], paths[1], verify_evidence=True)
 
 
 def test_reported_metric_comes_from_the_rule_selected_epoch() -> None:
@@ -251,7 +414,7 @@ def test_an_unexpected_config_change_blocks_the_comparison() -> None:
         report(STACK, 16, 0.9310), variant, expected_config_changes={"lora.rank", "lora.alpha"}
     )
     with pytest.raises(EvidenceError, match="unexpected config changes"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_an_ablation_that_forgot_to_change_anything_is_refused() -> None:
@@ -261,7 +424,7 @@ def test_an_ablation_that_forgot_to_change_anything_is_refused() -> None:
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
     with pytest.raises(EvidenceError, match="did not actually change"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_the_comparison_reads_the_selected_epoch_not_the_best_one() -> None:

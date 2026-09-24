@@ -164,6 +164,18 @@ An explicit `verify --training-only` scope ignores existing final-test and
 interval artifacts, loads publisher train only, and verifies the validation
 metrics, checkpoint selection, and adapter manifests without requesting the
 publisher test split.
+`compare-runs --strict` applies that same reports-only training verification to
+each run against its own evidence root before it emits a comparison. It also
+reconstructs both validation selections from the pinned publisher-train split
+and requires their ordered row-ID digests to match; equal label sequences alone
+cannot make different validation articles look equivalent. The command calls
+matching config, GPU, and package fields `recorded_controls_match`; it does not
+emit a `controlled` claim. Configs are schema-validated, but historical GPU and
+package values — and the configs themselves — are self-reported by the same
+mutable training reports and lack a second evidence source. The comparison
+likewise omits parameter counts, adapter bytes, wall time, and peak memory
+because those resource values are not
+independently bound for both sides of the historical rank comparison.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
