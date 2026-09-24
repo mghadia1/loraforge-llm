@@ -1,9 +1,8 @@
-"""Compare two training runs, and refuse to call the comparison controlled if it isn't.
+"""Compare verified validation evidence and the controls recorded by two runs.
 
-An ablation only attributes a difference to the variable under test when nothing
-else moved. Both failures this project hit are checked here: a library stack that
-silently changed between runs, and a config that drifted in more than the field
-being studied.
+Strict comparison catches a library stack or config that visibly drifted, but the
+historical GPU and package fields are self-reported by each training report. A
+match is useful provenance; it is not independent proof that nothing else moved.
 """
 
 from __future__ import annotations
@@ -74,7 +73,7 @@ def compare_runs(
     validation_row_ids_sha256: tuple[str, str] | None = None,
     evidence_verified: bool = False,
 ) -> dict[str, Any]:
-    """Diff two training reports and judge whether the comparison is controlled."""
+    """Diff two reports without overstating self-reported controls as verified."""
     expected = expected_config_changes or set()
 
     package_drift = differences(
@@ -111,7 +110,7 @@ def compare_runs(
     validation_data_matches = validation_labels_match and (
         validation_rows_match if evidence_verified else True
     )
-    controlled = (
+    recorded_controls_match = (
         not blocking_packages
         and not unexpected_config
         and not missing_expected
@@ -122,8 +121,13 @@ def compare_runs(
     baseline_best = _selected_macro_f1(baseline, "baseline")
     variant_best = _selected_macro_f1(variant, "variant")
     return {
-        "controlled": controlled,
+        "recorded_controls_match": recorded_controls_match,
         "evidence_verified": evidence_verified,
+        "control_evidence": {
+            "source": "self_reported_training_reports",
+            "independently_verified": False,
+            "fields": ["config", "gpu", "packages"],
+        },
         "package_differences": package_drift,
         "blocking_package_differences": blocking_packages,
         "config_differences": config_drift,
@@ -158,11 +162,11 @@ def compare_runs(
     }
 
 
-def require_controlled(
+def require_strict_comparison(
     comparison: dict[str, Any], *, require_verified_evidence: bool = False
 ) -> None:
-    """Raise unless the only thing that changed is what the ablation meant to change."""
-    if comparison["controlled"] and (
+    """Raise on failed evidence verification or drift in the recorded controls."""
+    if comparison["recorded_controls_match"] and (
         comparison.get("evidence_verified") or not require_verified_evidence
     ):
         return
@@ -186,8 +190,8 @@ def require_controlled(
             f"rows={comparison['validation_row_ids_sha256']}"
         )
     raise EvidenceError(
-        "this comparison is not controlled, so a difference cannot be attributed to the "
-        "variable under test — " + "; ".join(reasons)
+        "strict comparison refused because its evidence or recorded controls do not "
+        "match — " + "; ".join(reasons)
     )
 
 

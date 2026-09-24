@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from loraforge.compare import compare_report_files, compare_runs, require_controlled
+from loraforge.compare import (
+    compare_report_files,
+    compare_runs,
+    require_strict_comparison,
+)
 from loraforge.data import (
     Example,
     Split,
@@ -150,15 +154,34 @@ def report(packages: dict, rank: int, macro_f1: float, gpu: str = "Tesla T4") ->
 STACK = {"transformers": "5.13.1", "peft": "0.19.1", "torch": "2.11.0+cu128"}
 
 
-def test_a_clean_rank_ablation_is_controlled() -> None:
+def test_matching_recorded_controls_allow_comparison() -> None:
     comparison = compare_runs(
         report(STACK, 16, 0.9310),
         report(STACK, 4, 0.9295),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert comparison["validation_macro_f1"]["delta"] == pytest.approx(-0.0015)
-    require_controlled(comparison)
+    require_strict_comparison(comparison)
+
+
+def test_self_reported_controls_are_not_marked_independently_verified() -> None:
+    fabricated = {name: "0.0-fabricated" for name in STACK}
+    comparison = compare_runs(
+        report(fabricated, 16, 0.9310, gpu="Imaginary H100"),
+        report(fabricated, 4, 0.9295, gpu="Imaginary H100"),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        validation_row_ids_sha256=("same-rows", "same-rows"),
+        evidence_verified=True,
+    )
+
+    assert comparison["recorded_controls_match"] is True
+    assert comparison["control_evidence"] == {
+        "source": "self_reported_training_reports",
+        "independently_verified": False,
+        "fields": ["config", "gpu", "packages"],
+    }
+    assert "controlled" not in comparison
 
 
 def test_comparison_omits_unbound_resource_claims() -> None:
@@ -177,7 +200,7 @@ def test_comparison_omits_unbound_resource_claims() -> None:
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
 
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert comparison["resource_claims_omitted"] == [
         "trainable_parameters",
         "wall_time_seconds",
@@ -202,9 +225,9 @@ def test_a_changed_library_version_blocks_the_comparison() -> None:
         report(drifted, 4, 0.8500),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="library versions changed"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_a_different_host_torch_is_reported_but_not_blocking() -> None:
@@ -215,22 +238,22 @@ def test_a_different_host_torch_is_reported_but_not_blocking() -> None:
         report(other, 4, 0.9295),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert "torch" in comparison["package_differences"]
 
 
-def test_a_different_gpu_blocks_the_controlled_comparison() -> None:
+def test_a_different_gpu_blocks_the_strict_comparison() -> None:
     comparison = compare_runs(
         report(STACK, 16, 0.9310, gpu="Tesla T4"),
         report(STACK, 4, 0.9295, gpu="A100"),
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="GPU model changed"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
-def test_different_validation_rows_block_the_controlled_comparison() -> None:
+def test_different_validation_rows_block_the_strict_comparison() -> None:
     variant = report(STACK, 4, 0.9295)
     variant["validation_label_sha256"] = "different-validation-labels"
     comparison = compare_runs(
@@ -238,9 +261,9 @@ def test_different_validation_rows_block_the_controlled_comparison() -> None:
         variant,
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="validation labels"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_verified_comparison_requires_exact_validation_row_identity() -> None:
@@ -253,9 +276,9 @@ def test_verified_comparison_requires_exact_validation_row_identity() -> None:
     )
     assert comparison["validation_labels_match"] is True
     assert comparison["validation_rows_match"] is False
-    assert comparison["controlled"] is False
+    assert comparison["recorded_controls_match"] is False
     with pytest.raises(EvidenceError, match="exact row identities"):
-        require_controlled(comparison, require_verified_evidence=True)
+        require_strict_comparison(comparison, require_verified_evidence=True)
 
 
 def test_strict_file_comparison_verifies_both_reports_and_row_ids(
@@ -315,8 +338,9 @@ def test_strict_file_comparison_verifies_both_reports_and_row_ids(
         verify_evidence=True,
     )
 
-    assert comparison["controlled"] is True
+    assert comparison["recorded_controls_match"] is True
     assert comparison["evidence_verified"] is True
+    assert comparison["control_evidence"]["independently_verified"] is False
     assert comparison["validation_rows_match"] is True
     assert verified == [
         (roots[0], bundles[16].validation.labels, False),
@@ -390,7 +414,7 @@ def test_an_unexpected_config_change_blocks_the_comparison() -> None:
         report(STACK, 16, 0.9310), variant, expected_config_changes={"lora.rank", "lora.alpha"}
     )
     with pytest.raises(EvidenceError, match="unexpected config changes"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_an_ablation_that_forgot_to_change_anything_is_refused() -> None:
@@ -400,7 +424,7 @@ def test_an_ablation_that_forgot_to_change_anything_is_refused() -> None:
         expected_config_changes={"lora.rank", "lora.alpha"},
     )
     with pytest.raises(EvidenceError, match="did not actually change"):
-        require_controlled(comparison)
+        require_strict_comparison(comparison)
 
 
 def test_the_comparison_reads_the_selected_epoch_not_the_best_one() -> None:
