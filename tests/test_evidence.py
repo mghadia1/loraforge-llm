@@ -25,6 +25,7 @@ from loraforge.provenance import (
     read_json,
     save_logits,
     sha256_directory,
+    sha256_file,
     sha256_labels,
     verify_directory_snapshot,
     write_json,
@@ -129,6 +130,42 @@ def make_training_run(
         },
     }
     write_json(report, root / "outputs" / "training-report.json")
+    return report
+
+
+def upgrade_to_manifest_bound_report(root: Path, report: dict) -> dict:
+    report["schema_version"] = 2
+    report["environment"] = {
+        "python": "3.12.0",
+        "platform": "test-host",
+        "packages": {"transformers": "test-version"},
+        "gpu_name": "Tesla T4",
+        "cuda_available": True,
+        "cuda_version": "12.8",
+    }
+    report["training_arguments"] = {"learning_rate": 0.0002, "seed": 73}
+    report["parameters"] = {
+        "trainable_parameters": 41_943_040,
+        "only_lora_parameters_trainable": True,
+    }
+    manifest_path = root / "outputs" / "pretraining-manifest.json"
+    write_json(
+        {
+            "schema_version": 1,
+            "created_at_utc": "2026-09-25T16:00:00Z",
+            "stage": "before_optimizer_training",
+            "test_loaded": False,
+            "config": report["config"],
+            "environment": report["environment"],
+            "training_arguments": report["training_arguments"],
+            "parameters": report["parameters"],
+        },
+        manifest_path,
+    )
+    report["pretraining_manifest"] = {
+        "path": "outputs/pretraining-manifest.json",
+        "sha256": sha256_file(manifest_path),
+    }
     return report
 
 
@@ -272,6 +309,51 @@ def test_training_report_selection_rule_is_frozen(tmp_path) -> None:
     report["selection"]["rule"] = "highest score wins"
 
     with pytest.raises(EvidenceError, match="selection rule"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_manifest_bound_training_report_verifies(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+
+    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+
+def test_schema_v2_training_report_requires_the_pretraining_manifest(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    report["schema_version"] = 2
+
+    with pytest.raises(EvidenceError, match="pretraining_manifest reference"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_edited_pretraining_manifest_is_rejected_by_its_retained_hash(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest["environment"]["gpu_name"] = "Imaginary H100"
+    write_json(manifest, path)
+
+    with pytest.raises(EvidenceError, match="manifest hash"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_rehashed_manifest_must_still_match_the_training_report(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest["environment"]["gpu_name"] = "Imaginary H100"
+    write_json(manifest, path)
+    report["pretraining_manifest"]["sha256"] = sha256_file(path)
+
+    with pytest.raises(EvidenceError, match="environment does not match"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_pretraining_manifest_path_cannot_escape_the_evidence_root(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    report["pretraining_manifest"]["path"] = "../pretraining-manifest.json"
+
+    with pytest.raises(EvidenceError, match="canonical outputs path"):
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 

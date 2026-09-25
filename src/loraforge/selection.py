@@ -11,9 +11,12 @@ import numpy as np
 from .metrics import evaluation_block, fit_temperature, softmax
 from .provenance import (
     EvidenceError,
+    PRETRAINING_MANIFEST_PATH,
     load_logits,
     read_json,
     resolve_adapter_directory,
+    resolve_evidence_file,
+    sha256_file,
     utc_now,
     verify_directory_snapshot,
     write_json,
@@ -94,13 +97,77 @@ def training_report_config(report: dict[str, Any]):
         ) from error
 
 
-def _verify_training_protocol(report: dict[str, Any]):
+def _verify_pretraining_manifest(report: dict[str, Any], root: Path) -> None:
+    """Bind schema-v2 training controls to the file captured before training."""
+    reference = report.get("pretraining_manifest")
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        raise EvidenceError(
+            "schema-v2 training report must contain an exact pretraining_manifest reference"
+        )
+    if reference.get("path") != PRETRAINING_MANIFEST_PATH:
+        raise EvidenceError(
+            "pre-training manifest must use the canonical outputs path"
+        )
+    target = resolve_evidence_file(
+        root,
+        reference["path"],
+        label="pre-training manifest",
+        suffix=".json",
+    )
+    if not target.is_file():
+        raise EvidenceError(f"required pre-training manifest {target} does not exist")
+    actual_sha256 = sha256_file(target)
+    if reference.get("sha256") != actual_sha256:
+        raise EvidenceError(
+            "pre-training manifest hash does not match the training report reference"
+        )
+
+    manifest = read_json(target)
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "stage",
+        "test_loaded",
+        "config",
+        "environment",
+        "training_arguments",
+        "parameters",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_fields:
+        raise EvidenceError("pre-training manifest fields do not match schema version 1")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
+        raise EvidenceError("pre-training manifest schema_version must be integer 1")
+    if (
+        not isinstance(manifest.get("created_at_utc"), str)
+        or not manifest["created_at_utc"].endswith("Z")
+    ):
+        raise EvidenceError("pre-training manifest created_at_utc must be a UTC timestamp")
+    if manifest.get("stage") != "before_optimizer_training":
+        raise EvidenceError("pre-training manifest stage is not before optimizer training")
+    if manifest.get("test_loaded") is not False:
+        raise EvidenceError("pre-training manifest must keep publisher test locked")
+    for field in ("config", "environment", "training_arguments", "parameters"):
+        if manifest.get(field) != report.get(field):
+            raise EvidenceError(
+                f"training report {field} does not match its hash-bound pre-training manifest"
+            )
+
+
+def _verify_training_protocol(report: dict[str, Any], *, root: Path = Path(".")):
     """Bind copied training-report provenance and counts to its validated config."""
     from .data import CLASS_NAMES
 
     config = training_report_config(report)
+    schema_version = report.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, 2):
+        raise EvidenceError("training report schema_version must be integer 1 or 2")
+    if schema_version == 2:
+        _verify_pretraining_manifest(report, root)
+    elif "pretraining_manifest" in report:
+        raise EvidenceError(
+            "schema-v1 training report cannot claim a pre-training manifest"
+        )
     expected = {
-        "schema_version": 1,
         "model": config.model_name,
         "model_revision": config.model_revision,
         "test_evaluated": False,
@@ -141,7 +208,7 @@ def verify_training_report(
     from .qlora import verify_saved_adapter_config
     from .training import select_checkpoint
 
-    config = _verify_training_protocol(report)
+    config = _verify_training_protocol(report, root=root)
     labels = _validation_labels(report, root, labels, config=config)
     base_logits = load_logits(report["base_validation_logits"], root=root)
     recompute_block(base_logits, labels, report["base_validation_metrics"], "base_validation")

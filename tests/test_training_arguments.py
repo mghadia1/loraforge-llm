@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from loraforge.config import default_config
-from loraforge.provenance import EvidenceError
-from loraforge.training import training_argument_kwargs
+from loraforge.provenance import EvidenceError, read_json, sha256_file
+from loraforge.training import capture_pretraining_manifest, training_argument_kwargs
 
 
 MODERN = {
@@ -64,3 +64,35 @@ def test_cosmetic_arguments_are_dropped_quietly() -> None:
 def test_no_unsupported_argument_ever_reaches_TrainingArguments() -> None:
     supported = MODERN - {"remove_unused_columns", "save_strategy"}
     assert set(build(supported)).issubset(supported)
+
+
+def test_pretraining_manifest_is_written_once_and_hash_bound(
+    tmp_path, monkeypatch
+) -> None:
+    recorded_environment = {
+        "python": "3.12.0",
+        "platform": "test-host",
+        "packages": {"transformers": "test-version"},
+        "gpu_name": "Tesla T4",
+        "cuda_available": True,
+        "cuda_version": "12.8",
+    }
+    monkeypatch.setattr("loraforge.training.environment", lambda: recorded_environment)
+    monkeypatch.setattr("loraforge.training.utc_now", lambda: "2026-09-25T16:00:00Z")
+    arguments = build(MODERN)
+    parameters = {"trainable_parameters": 41_943_040}
+
+    manifest, reference = capture_pretraining_manifest(
+        default_config(), arguments, parameters, root=tmp_path
+    )
+    path = tmp_path / reference["path"]
+
+    assert manifest == read_json(path)
+    assert manifest["stage"] == "before_optimizer_training"
+    assert manifest["test_loaded"] is False
+    assert manifest["environment"] == recorded_environment
+    assert reference["sha256"] == sha256_file(path)
+    with pytest.raises(EvidenceError, match="already exists"):
+        capture_pretraining_manifest(
+            default_config(), arguments, parameters, root=tmp_path
+        )
