@@ -25,6 +25,8 @@ AUDITED_PACKAGES = (
     "trl",
 )
 
+PRETRAINING_MANIFEST_PATH = "outputs/pretraining-manifest.json"
+
 
 class EvidenceError(RuntimeError):
     """Raised when a stored artifact disagrees with what its own data recomputes."""
@@ -211,6 +213,36 @@ def resolve_adapter_directory(root: Path, relative_path: str) -> Path:
     except ValueError as error:
         raise EvidenceError(
             f"adapter directory escapes its evidence root: {relative_path!r}"
+        ) from error
+    return target
+
+
+def resolve_evidence_file(
+    root: Path,
+    relative_path: str,
+    *,
+    label: str,
+    suffix: str | None = None,
+) -> Path:
+    """Resolve one repo-relative evidence file without allowing path escape."""
+    if not isinstance(relative_path, str) or not relative_path:
+        raise EvidenceError(f"{label} path must be a nonempty repo-relative string")
+    candidate = Path(relative_path)
+    if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
+        raise EvidenceError(
+            f"{label} path must stay repo-relative under its evidence root: "
+            f"{relative_path!r}"
+        )
+    if suffix is not None and candidate.suffix != suffix:
+        raise EvidenceError(f"{label} path must end in {suffix}: {relative_path!r}")
+
+    resolved_root = Path(root).resolve()
+    target = (resolved_root / candidate).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as error:
+        raise EvidenceError(
+            f"{label} path escapes its evidence root: {relative_path!r}"
         ) from error
     return target
 

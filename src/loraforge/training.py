@@ -15,10 +15,12 @@ from .data import DatasetBundle
 from .metrics import evaluation_block
 from .provenance import (
     EvidenceError,
+    PRETRAINING_MANIFEST_PATH,
     environment,
     read_json,
     save_logits,
     sha256_directory,
+    sha256_file,
     sha256_labels,
     utc_now,
     write_json,
@@ -31,6 +33,43 @@ from .selection import SELECTION_RULE
 # across GPU sessions, tight enough that a changed prompt, tokenizer, or model
 # revision cannot hide inside it.
 BASELINE_AGREEMENT_TOLERANCE = 0.005
+TRAINING_REPORT_SCHEMA_VERSION = 2
+
+
+def capture_pretraining_manifest(
+    config: ExperimentConfig,
+    training_arguments: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    root: Path = Path("."),
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Write the immutable controls captured before optimizer training starts."""
+    root = Path(root)
+    target = root / PRETRAINING_MANIFEST_PATH
+    if target.exists():
+        raise EvidenceError(
+            f"{target} already exists; move it aside before retraining so a prior "
+            "attempt's pre-training controls are never silently overwritten"
+        )
+    manifest = {
+        "schema_version": 1,
+        "created_at_utc": utc_now(),
+        "stage": "before_optimizer_training",
+        "test_loaded": False,
+        "config": config.to_dict(),
+        "environment": environment(),
+        "training_arguments": training_arguments,
+        "parameters": parameters,
+    }
+    write_json(manifest, target)
+    # JSON normalizes tuples such as target_modules to arrays. Keep the in-memory
+    # values byte-semantically aligned with the artifact that will be verified.
+    manifest = read_json(target)
+    reference = {
+        "path": PRETRAINING_MANIFEST_PATH,
+        "sha256": sha256_file(target),
+    }
+    return manifest, reference
 
 
 def select_checkpoint(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -204,6 +243,11 @@ def train_qlora(
             "outputs/training-report.json already exists; move it aside before retraining "
             "so a failed run is never silently overwritten"
         )
+    if (root / PRETRAINING_MANIFEST_PATH).exists():
+        raise EvidenceError(
+            f"{root / PRETRAINING_MANIFEST_PATH} already exists; move it aside before "
+            "retraining so a prior attempt's controls are preserved"
+        )
 
     torch.manual_seed(config.data.seed)
     # Audit first: this raises if any non-adapter weight is trainable, which is
@@ -232,6 +276,12 @@ def train_qlora(
         output_dir=str(root / "outputs" / "trainer"),
         total_optimizer_steps=total_optimizer_steps,
     )
+    pretraining, pretraining_reference = capture_pretraining_manifest(
+        config,
+        argument_kwargs,
+        parameters,
+        root=root,
+    )
     arguments = TrainingArguments(**argument_kwargs)
     trainer = Trainer(
         model=model,
@@ -257,14 +307,15 @@ def train_qlora(
     shutil.copytree(root / selected["adapter_dir"], selected_dir)
 
     report = {
-        "schema_version": 1,
+        "schema_version": TRAINING_REPORT_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "model": config.model_name,
         "model_revision": config.model_revision,
-        "config": config.to_dict(),
-        "environment": environment(),
-        "training_arguments": argument_kwargs,
-        "parameters": parameters,
+        "config": pretraining["config"],
+        "pretraining_manifest": pretraining_reference,
+        "environment": pretraining["environment"],
+        "training_arguments": pretraining["training_arguments"],
+        "parameters": pretraining["parameters"],
         "test_evaluated": False,
         "train_rows": len(bundle.train),
         "validation_rows": len(bundle.validation),
