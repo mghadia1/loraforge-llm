@@ -10,6 +10,7 @@ import numpy as np
 
 from .metrics import evaluation_block, fit_temperature, softmax
 from .provenance import (
+    AUDITED_PACKAGES,
     EvidenceError,
     PRETRAINING_MANIFEST_PATH,
     load_logits,
@@ -97,7 +98,195 @@ def training_report_config(report: dict[str, Any]):
         ) from error
 
 
-def _verify_pretraining_manifest(report: dict[str, Any], root: Path) -> None:
+def _manifest_object(manifest: dict[str, Any], field: str) -> dict[str, Any]:
+    value = manifest.get(field)
+    if type(value) is not dict:
+        raise EvidenceError(f"pre-training manifest {field} must be a JSON object")
+    return value
+
+
+def _verify_manifest_environment(manifest: dict[str, Any]) -> None:
+    recorded = _manifest_object(manifest, "environment")
+    required = {"python", "platform", "packages", "gpu_name", "cuda_available"}
+    optional = {"cuda_version"}
+    missing = required - recorded.keys()
+    unexpected = recorded.keys() - required - optional
+    if missing or unexpected:
+        raise EvidenceError(
+            "pre-training manifest environment fields differ from schema: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    for field in ("python", "platform"):
+        if type(recorded[field]) is not str or not recorded[field]:
+            raise EvidenceError(
+                f"pre-training manifest environment.{field} must be a nonempty string"
+            )
+    packages = recorded["packages"]
+    if type(packages) is not dict or set(packages) != set(AUDITED_PACKAGES):
+        raise EvidenceError(
+            "pre-training manifest environment.packages must contain exactly the "
+            "audited package versions"
+        )
+    if any(type(value) is not str or not value for value in packages.values()):
+        raise EvidenceError(
+            "pre-training manifest environment package versions must be nonempty strings"
+        )
+    cuda_available = recorded["cuda_available"]
+    if type(cuda_available) is not bool:
+        raise EvidenceError(
+            "pre-training manifest environment.cuda_available must be a JSON boolean"
+        )
+    if cuda_available:
+        for field in ("gpu_name", "cuda_version"):
+            if type(recorded.get(field)) is not str or not recorded[field]:
+                raise EvidenceError(
+                    f"pre-training manifest environment.{field} must be a nonempty "
+                    "string when CUDA is available"
+                )
+    elif recorded["gpu_name"] is not None or "cuda_version" in recorded:
+        raise EvidenceError(
+            "pre-training manifest environment cannot claim GPU/CUDA details when "
+            "CUDA is unavailable"
+        )
+
+
+def _verify_manifest_training_arguments(manifest: dict[str, Any], config) -> None:
+    from .data import CLASS_NAMES
+
+    recorded = _manifest_object(manifest, "training_arguments")
+    required = {
+        "output_dir",
+        "num_train_epochs",
+        "learning_rate",
+        "per_device_train_batch_size",
+        "gradient_accumulation_steps",
+        "gradient_checkpointing",
+        "optim",
+        "fp16",
+        "seed",
+    }
+    optional = {
+        "logging_steps",
+        "save_strategy",
+        "report_to",
+        "remove_unused_columns",
+        "warmup_ratio",
+        "warmup_steps",
+    }
+    missing = required - recorded.keys()
+    unexpected = recorded.keys() - required - optional
+    if missing or unexpected:
+        raise EvidenceError(
+            "pre-training manifest training_arguments fields differ from schema: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    expected = {
+        "num_train_epochs": config.training.epochs,
+        "learning_rate": config.training.learning_rate,
+        "per_device_train_batch_size": config.training.per_device_train_batch_size,
+        "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
+        "gradient_checkpointing": config.training.gradient_checkpointing,
+        "optim": config.training.optimizer,
+        "fp16": config.quantization.compute_dtype == "float16",
+        "seed": config.data.seed,
+    }
+    for field, value in expected.items():
+        actual = recorded[field]
+        if type(actual) is not type(value) or actual != value:
+            raise EvidenceError(
+                f"pre-training manifest training_arguments.{field} does not match config"
+            )
+    if type(recorded["output_dir"]) is not str or not recorded["output_dir"]:
+        raise EvidenceError(
+            "pre-training manifest training_arguments.output_dir must be a nonempty string"
+        )
+    warmup_fields = {"warmup_ratio", "warmup_steps"} & recorded.keys()
+    if len(warmup_fields) != 1:
+        raise EvidenceError(
+            "pre-training manifest training_arguments must contain exactly one warmup control"
+        )
+    if "warmup_ratio" in recorded:
+        if (
+            type(recorded["warmup_ratio"]) not in (int, float)
+            or not math.isfinite(recorded["warmup_ratio"])
+            or recorded["warmup_ratio"] != config.training.warmup_ratio
+        ):
+            raise EvidenceError(
+                "pre-training manifest training_arguments.warmup_ratio does not match config"
+            )
+    else:
+        effective_batch = (
+            config.training.per_device_train_batch_size
+            * config.training.gradient_accumulation_steps
+        )
+        train_rows = len(CLASS_NAMES) * config.data.train_per_class
+        optimizer_steps = math.ceil(train_rows / effective_batch) * config.training.epochs
+        expected_steps = max(1, round(config.training.warmup_ratio * optimizer_steps))
+        if type(recorded["warmup_steps"]) is not int or recorded["warmup_steps"] != expected_steps:
+            raise EvidenceError(
+                "pre-training manifest training_arguments.warmup_steps does not match config"
+            )
+    cosmetic = {
+        "logging_steps": 10,
+        "save_strategy": "no",
+        "report_to": [],
+        "remove_unused_columns": False,
+    }
+    for field, value in cosmetic.items():
+        if field in recorded and (
+            type(recorded[field]) is not type(value) or recorded[field] != value
+        ):
+            raise EvidenceError(
+                f"pre-training manifest training_arguments.{field} is invalid"
+            )
+
+
+def _verify_manifest_parameters(manifest: dict[str, Any]) -> None:
+    recorded = _manifest_object(manifest, "parameters")
+    expected_fields = {
+        "total_parameters",
+        "trainable_parameters",
+        "trainable_percent",
+        "stored_tensor_elements",
+        "counting_note",
+        "only_lora_parameters_trainable",
+    }
+    if set(recorded) != expected_fields:
+        raise EvidenceError(
+            "pre-training manifest parameters fields differ from schema"
+        )
+    for field in ("total_parameters", "trainable_parameters", "stored_tensor_elements"):
+        if type(recorded[field]) is not int or recorded[field] <= 0:
+            raise EvidenceError(
+                f"pre-training manifest parameters.{field} must be a positive integer"
+            )
+    total = recorded["total_parameters"]
+    trainable = recorded["trainable_parameters"]
+    stored = recorded["stored_tensor_elements"]
+    if trainable > total or stored > total:
+        raise EvidenceError(
+            "pre-training manifest parameter counts are internally inconsistent"
+        )
+    percentage = recorded["trainable_percent"]
+    if (
+        type(percentage) is not float
+        or not math.isfinite(percentage)
+        or abs(percentage - (100 * trainable / total)) > 1e-12
+    ):
+        raise EvidenceError(
+            "pre-training manifest parameters.trainable_percent does not match its counts"
+        )
+    if type(recorded["counting_note"]) is not str or not recorded["counting_note"]:
+        raise EvidenceError(
+            "pre-training manifest parameters.counting_note must be a nonempty string"
+        )
+    if recorded["only_lora_parameters_trainable"] is not True:
+        raise EvidenceError(
+            "pre-training manifest must record that only LoRA parameters are trainable"
+        )
+
+
+def _verify_pretraining_manifest(report: dict[str, Any], root: Path, config) -> None:
     """Bind schema-v2 training controls to the file captured before training."""
     reference = report.get("pretraining_manifest")
     if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
@@ -146,6 +335,9 @@ def _verify_pretraining_manifest(report: dict[str, Any], root: Path) -> None:
         raise EvidenceError("pre-training manifest stage is not before optimizer training")
     if manifest.get("test_loaded") is not False:
         raise EvidenceError("pre-training manifest must keep publisher test locked")
+    _verify_manifest_environment(manifest)
+    _verify_manifest_training_arguments(manifest, config)
+    _verify_manifest_parameters(manifest)
     for field in ("config", "environment", "training_arguments", "parameters"):
         if manifest.get(field) != report.get(field):
             raise EvidenceError(
@@ -162,7 +354,7 @@ def _verify_training_protocol(report: dict[str, Any], *, root: Path = Path("."))
     if type(schema_version) is not int or schema_version not in (1, 2):
         raise EvidenceError("training report schema_version must be integer 1 or 2")
     if schema_version == 2:
-        _verify_pretraining_manifest(report, root)
+        _verify_pretraining_manifest(report, root, config)
     elif "pretraining_manifest" in report:
         raise EvidenceError(
             "schema-v1 training report cannot claim a pre-training manifest"
