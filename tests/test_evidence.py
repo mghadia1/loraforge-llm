@@ -107,6 +107,18 @@ def make_training_run(
         root, "adapters/selected", f"weights-{best['epoch']}"
     )
     config = synthetic_config()
+    base_metrics = evaluation_block(base_logits, LABELS)
+    write_json(
+        {
+            "schema_version": 1,
+            "model": config.model_name,
+            "model_revision": config.model_revision,
+            "split": "validation",
+            "test_evaluated": False,
+            "metrics_before_temperature": base_metrics,
+        },
+        root / "outputs" / "base-validation.json",
+    )
     report = {
         "schema_version": 1,
         "model": config.model_name,
@@ -116,7 +128,14 @@ def make_training_run(
         "train_rows": 40,
         "validation_rows": len(LABELS),
         "validation_label_sha256": sha256_labels(LABELS),
-        "base_validation_metrics": evaluation_block(base_logits, LABELS),
+        "baseline_agreement": {
+            "phase_one_macro_f1": base_metrics["macro_f1"],
+            "rescored_macro_f1": base_metrics["macro_f1"],
+            "absolute_difference": 0.0,
+            "tolerance": 0.005,
+            "agrees": True,
+        },
+        "base_validation_metrics": base_metrics,
         "base_validation_logits": save_logits(
             base_logits, root, "outputs/logits/base-validation.npy"
         ),
@@ -272,6 +291,68 @@ def test_training_report_selection_rule_is_frozen(tmp_path) -> None:
     report["selection"]["rule"] = "highest score wins"
 
     with pytest.raises(EvidenceError, match="selection rule"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_training_report_requires_the_phase_one_baseline_agreement(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    del report["baseline_agreement"]
+
+    with pytest.raises(EvidenceError, match="baseline_agreement must be an object"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("phase_one_macro_f1", 0.5),
+        ("rescored_macro_f1", 0.5),
+        ("absolute_difference", 0.5),
+        ("tolerance", 0.5),
+        ("agrees", 1),
+    ],
+)
+def test_training_report_baseline_agreement_is_recomputed(
+    tmp_path, field, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    report["baseline_agreement"][field] = replacement
+
+    with pytest.raises(EvidenceError, match=rf"baseline_agreement\.{field}"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("schema_version", True),
+        ("model", "unrelated/model"),
+        ("model_revision", "0" * 40),
+        ("split", "test"),
+        ("test_evaluated", 0),
+    ],
+)
+def test_phase_one_baseline_provenance_matches_the_training_protocol(
+    tmp_path, field, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "base-validation.json"
+    baseline = read_json(path)
+    baseline[field] = replacement
+    write_json(baseline, path)
+
+    with pytest.raises(EvidenceError, match=rf"phase-one baseline {field}"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_phase_one_baseline_must_be_within_the_frozen_tolerance(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "base-validation.json"
+    baseline = read_json(path)
+    baseline["metrics_before_temperature"]["macro_f1"] = 0.0
+    write_json(baseline, path)
+
+    with pytest.raises(EvidenceError, match="disagrees with"):
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 

@@ -123,7 +123,10 @@ Before the first optimizer step, the trainer re-scores validation with the
 adapter switched off and refuses to continue unless it reproduces the phase-one
 baseline macro-F1. That single check catches a changed prompt, tokenizer, or
 model revision between the two GPU sessions — the failure that would otherwise
-turn into a fake improvement.
+turn into a fake improvement. Evidence verification repeats that compatibility
+check against `outputs/base-validation.json`, validates the artifact's model,
+revision, split, locked-test state, and row count, and rejects a missing or
+edited `baseline_agreement` block in the training report.
 
 After each epoch the adapter is saved, hashed, and scored on validation. The
 selection rule is one line: highest validation macro-F1, and an exact tie goes
