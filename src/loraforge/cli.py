@@ -123,8 +123,9 @@ def main() -> int:
     if args.command == "train":
         from .modeling import load_quantized_base
         from .qlora import attach_lora
-        from .training import train_qlora
+        from .training import refuse_existing_training_outputs, train_qlora
 
+        refuse_existing_training_outputs(args.root)
         bundle = load_dataset(allow_test=False, config=config.data)
         model, tokenizer = load_quantized_base(config)
         model = attach_lora(model, config)

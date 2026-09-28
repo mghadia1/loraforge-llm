@@ -4,7 +4,10 @@ import pytest
 
 from loraforge.config import default_config
 from loraforge.provenance import EvidenceError
-from loraforge.training import training_argument_kwargs
+from loraforge.training import (
+    refuse_existing_training_outputs,
+    training_argument_kwargs,
+)
 
 
 MODERN = {
@@ -64,3 +67,53 @@ def test_cosmetic_arguments_are_dropped_quietly() -> None:
 def test_no_unsupported_argument_ever_reaches_TrainingArguments() -> None:
     supported = MODERN - {"remove_unused_columns", "save_strategy"}
     assert set(build(supported)).issubset(supported)
+
+
+def test_phase_one_inputs_are_allowed_in_a_fresh_training_root(tmp_path) -> None:
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    (outputs / "base-validation.json").write_text("{}", encoding="utf-8")
+    (outputs / "qlora-setup.json").write_text("{}", encoding="utf-8")
+
+    refuse_existing_training_outputs(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "directory"),
+    [
+        ("outputs/training-report.json", False),
+        ("outputs/trainer", True),
+        ("outputs/logits/base-validation.npy", False),
+        ("outputs/logits/tuned-validation-epoch-7.npy", False),
+        ("adapters/epoch-interrupted", True),
+        ("adapters/selected", True),
+        ("outputs/frozen-selection.json", False),
+        ("outputs/final-test-attempt.json", False),
+        ("outputs/final-test-report.json", False),
+    ],
+)
+def test_training_refuses_any_prior_phase_two_artifact(
+    tmp_path, relative_path, directory
+) -> None:
+    artifact = tmp_path / relative_path
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    if directory:
+        artifact.mkdir()
+    else:
+        artifact.write_text("prior attempt", encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="use a fresh run root"):
+        refuse_existing_training_outputs(tmp_path)
+
+    assert artifact.exists()
+
+
+def test_training_refuses_a_broken_symlink_artifact(tmp_path) -> None:
+    selected = tmp_path / "adapters" / "selected"
+    selected.parent.mkdir(parents=True)
+    selected.symlink_to(tmp_path / "missing-prior-adapter", target_is_directory=True)
+
+    with pytest.raises(EvidenceError, match="adapters/selected"):
+        refuse_existing_training_outputs(tmp_path)
+
+    assert selected.is_symlink()

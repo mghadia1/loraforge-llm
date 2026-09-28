@@ -144,3 +144,27 @@ def test_verify_rejects_a_malformed_embedded_config_before_loading_data(
 
     with pytest.raises(EvidenceError, match="typed experiment schema"):
         cli.main()
+
+
+def test_train_refuses_stale_outputs_before_loading_data_or_model(
+    tmp_path, monkeypatch
+) -> None:
+    stale = tmp_path / "adapters" / "epoch-1"
+    stale.mkdir(parents=True)
+    monkeypatch.setattr(
+        cli,
+        "load_dataset",
+        lambda **kwargs: pytest.fail("stale outputs reached dataset loading"),
+    )
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("stale outputs reached model loading"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["loraforge", "train", "--root", str(tmp_path)],
+    )
+
+    with pytest.raises(EvidenceError, match="adapters/epoch-1"):
+        cli.main()
