@@ -63,12 +63,14 @@ def _assert_metric_tree(name: str, recorded: Any, recomputed: Any) -> None:
             _assert_metric_tree(f"{name}[{index}]", recorded[index], value)
         return
     if isinstance(recomputed, float):
+        if isinstance(recorded, bool) or not isinstance(recorded, (int, float)):
+            raise EvidenceError(f"{name} must be a finite number")
         try:
             _assert_close(name, recorded, recomputed)
         except (TypeError, ValueError) as error:
             raise EvidenceError(f"{name} must be a finite number") from error
         return
-    if recorded != recomputed:
+    if type(recorded) is not type(recomputed) or recorded != recomputed:
         raise EvidenceError(
             f"{name} recorded as {recorded!r} but its own logits recompute to {recomputed!r}"
         )
