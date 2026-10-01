@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,83 @@ METRIC_TOLERANCE = 1e-9
 TRAINING_REPORT = Path("outputs/training-report.json")
 FROZEN_SELECTION = Path("outputs/frozen-selection.json")
 SELECTION_RULE = "max validation macro_f1; exact tie resolved to the earlier epoch"
+FROZEN_SELECTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "test_evaluated",
+        "model",
+        "model_revision",
+        "selected_epoch",
+        "selected_adapter_dir",
+        "selected_adapter_hashes",
+        "selection_rule",
+        "validation_label_sha256",
+        "validation",
+    }
+)
+
+
+def _frozen_timestamp(name: str, value: Any) -> datetime:
+    if type(value) is not str or not value.endswith("Z"):
+        raise EvidenceError(f"frozen selection {name} must be a UTC timestamp ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise EvidenceError(
+            f"frozen selection {name} must be a valid UTC timestamp"
+        ) from error
+    if parsed.tzinfo != UTC:
+        raise EvidenceError(f"frozen selection {name} must be in UTC")
+    return parsed
+
+
+def _verify_frozen_envelope(frozen: Any) -> None:
+    """Validate the exact schema and lifecycle state of the one-run gate."""
+    if type(frozen) is not dict:
+        raise EvidenceError("frozen selection must be a JSON object")
+    if type(frozen.get("schema_version")) is not int or frozen["schema_version"] != 1:
+        raise EvidenceError("frozen selection schema_version must be the integer 1")
+    created_at = _frozen_timestamp("created_at_utc", frozen.get("created_at_utc"))
+    test_evaluated = frozen.get("test_evaluated")
+    if type(test_evaluated) is not bool:
+        raise EvidenceError("frozen selection test_evaluated must be a JSON boolean")
+
+    expected_fields = set(FROZEN_SELECTION_FIELDS)
+    if test_evaluated:
+        expected_fields.add("test_evaluated_at_utc")
+    actual_fields = set(frozen)
+    if actual_fields != expected_fields:
+        raise EvidenceError(
+            "frozen selection fields differ from schema: "
+            f"missing={sorted(expected_fields - actual_fields)}, "
+            f"unexpected={sorted(actual_fields - expected_fields)}"
+        )
+    if test_evaluated:
+        evaluated_at = _frozen_timestamp(
+            "test_evaluated_at_utc", frozen["test_evaluated_at_utc"]
+        )
+        if evaluated_at < created_at:
+            raise EvidenceError(
+                "frozen selection test_evaluated_at_utc predates created_at_utc"
+            )
+
+    validation = frozen.get("validation")
+    if type(validation) is not dict or set(validation) != {"base", "tuned"}:
+        raise EvidenceError(
+            "frozen selection validation must contain exactly base and tuned systems"
+        )
+    expected_system_fields = {
+        "logits",
+        "metrics",
+        "temperature",
+        "metrics_after_temperature",
+    }
+    for name, system in validation.items():
+        if type(system) is not dict or set(system) != expected_system_fields:
+            raise EvidenceError(
+                f"frozen selection validation.{name} fields differ from schema"
+            )
 
 
 def _assert_close(name: str, recorded: float, recomputed: float) -> None:
@@ -295,6 +373,7 @@ def verify_frozen_selection(
         report, root=root, labels=labels, verify_adapters=False
     )
     frozen = read_json(root / FROZEN_SELECTION)
+    _verify_frozen_envelope(frozen)
     expected_gate = {
         "model": report["model"],
         "model_revision": report["model_revision"],
@@ -305,7 +384,8 @@ def verify_frozen_selection(
         "validation_label_sha256": report["validation_label_sha256"],
     }
     for field, expected in expected_gate.items():
-        if frozen.get(field) != expected:
+        actual = frozen.get(field)
+        if type(actual) is not type(expected) or actual != expected:
             raise EvidenceError(f"frozen selection {field} does not match training evidence")
 
     sources = {
@@ -346,6 +426,7 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
     """Load the gate file and refuse to continue unless the adapter still matches it."""
     root = Path(root)
     frozen = read_json(root / FROZEN_SELECTION)
+    _verify_frozen_envelope(frozen)
     adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
     if not adapter_dir.is_dir():
         raise EvidenceError(f"selected adapter {adapter_dir} is missing")
@@ -359,6 +440,6 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
         raise EvidenceError(
             "the selected adapter changed after selection was frozen; test evaluation refused"
         ) from error
-    if frozen.get("test_evaluated"):
+    if frozen["test_evaluated"]:
         raise EvidenceError("frozen selection is already marked as test-evaluated")
     return frozen

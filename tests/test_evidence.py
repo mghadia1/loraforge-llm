@@ -32,6 +32,7 @@ from loraforge.provenance import (
 from loraforge.selection import (
     build_frozen_selection,
     require_frozen_selection,
+    verify_frozen_selection,
     verify_training_report,
 )
 
@@ -141,7 +142,7 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     tuned = _system_block(tuned_logits, LABELS, frozen["validation"]["tuned"]["temperature"], 3.2)
     report = {
         "schema_version": 1,
-        "created_at_utc": "2026-01-01T00:00:00Z",
+        "created_at_utc": frozen["created_at_utc"],
         "test_evaluated": True,
         "test_evaluations_run": 1,
         "split": "publisher test",
@@ -192,6 +193,40 @@ def test_frozen_selection_records_two_separate_validation_temperatures(tmp_path)
         frozen["validation"]["tuned"]["metrics_after_temperature"]["macro_f1"]
         == frozen["validation"]["tuned"]["metrics"]["macro_f1"]
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("schema_version", True, "schema_version"),
+        ("created_at_utc", "not-a-timestamp", "created_at_utc"),
+        ("test_evaluated", 0, "test_evaluated"),
+    ],
+)
+def test_frozen_selection_envelope_is_strictly_typed(
+    tmp_path, field, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen[field] = replacement
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_frozen_selection(root=tmp_path, labels=LABELS)
+
+
+def test_frozen_selection_rejects_unsupported_top_level_claims(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["unsupported_claim"] = "unverified"
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="unexpected=.*unsupported_claim"):
+        verify_frozen_selection(root=tmp_path, labels=LABELS)
 
 
 def test_selection_tie_break_is_honoured_end_to_end(tmp_path) -> None:
@@ -572,6 +607,49 @@ def test_final_test_checks_adapter_protocol_before_loading_the_base_model(
         )
 
 
+def test_final_test_revalidates_frozen_calibration_before_model_or_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["validation"]["base"]["temperature"] = 999.0
+    write_json(frozen, path)
+
+    validation = Split(
+        "validation",
+        tuple(
+            Example(
+                row_id=f"validation-{index}",
+                text=f"article {index}",
+                label=label,
+                source_index=index,
+            )
+            for index, label in enumerate(LABELS)
+        ),
+    )
+
+    class TrainOnlyBundle:
+        def __init__(self):
+            self.validation = validation
+
+    def load_train_only(*, allow_test, config):
+        assert allow_test is False
+        return TrainOnlyBundle()
+
+    monkeypatch.setattr("loraforge.data.load_dataset", load_train_only)
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("tampered gate reached GPU model loading"),
+    )
+
+    with pytest.raises(EvidenceError, match=r"frozen\.base\.temperature"):
+        run_final_test(
+            synthetic_config(), confirmation=CONFIRMATION, root=tmp_path
+        )
+
+
 def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
@@ -612,6 +690,9 @@ def test_final_test_claims_attempt_before_loading_publisher_test(
     )
     monkeypatch.setattr(
         "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: object()
+    )
+    monkeypatch.setattr(
+        "loraforge.final_test.verify_frozen_selection", lambda **kwargs: {}
     )
 
     def fail_after_claim(**kwargs):
@@ -661,6 +742,9 @@ def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) ->
     )
     monkeypatch.setattr(
         "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: FakeModel()
+    )
+    monkeypatch.setattr(
+        "loraforge.final_test.verify_frozen_selection", lambda **kwargs: {}
     )
     monkeypatch.setattr("loraforge.data.load_dataset", lambda **kwargs: FakeBundle())
     monkeypatch.setattr(
