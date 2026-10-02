@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from loraforge.config import default_config
@@ -37,9 +39,27 @@ def test_warmup_ratio_becomes_warmup_steps_when_the_ratio_is_unavailable() -> No
     assert kwargs["warmup_steps"] == 30  # 3% of 1,000 optimizer steps
 
 
-def test_warmup_steps_never_rounds_down_to_zero_on_a_short_run() -> None:
+def test_warmup_step_fallback_uses_the_same_ceiling_as_transformers() -> None:
     supported = (MODERN - {"warmup_ratio"}) | {"warmup_steps"}
-    assert build(supported, steps=5)["warmup_steps"] == 1
+    assert build(supported, steps=101)["warmup_steps"] == 4
+
+
+def test_zero_warmup_ratio_does_not_gain_a_fabricated_warmup_step() -> None:
+    supported = (MODERN - {"warmup_ratio"}) | {"warmup_steps"}
+    config = default_config()
+    config = replace(
+        config,
+        training=replace(config.training, warmup_ratio=0.0),
+    )
+
+    kwargs = training_argument_kwargs(
+        config,
+        supported,
+        output_dir="/tmp/out",
+        total_optimizer_steps=101,
+    )
+
+    assert kwargs["warmup_steps"] == 0
 
 
 def test_losing_warmup_entirely_is_refused() -> None:
