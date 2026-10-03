@@ -137,7 +137,9 @@ Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
 logits down to per-class precision/recall/F1 and every calibration bin, logits
 are confined to repo-relative paths under the evidence root and checked against
-both their recorded array shape and SHA-256. Adapter directory references are
+an exact nonempty float32 `[rows, 4]` payload contract, finite values, their
+strictly typed recorded shape, and SHA-256. The loader never coerces another
+dtype into the evidence contract. Adapter directory references are
 also required to be repo-relative, and their canonical paths — including any
 directory symlinks — must remain under the evidence root before reports-only
 verification, strict hashing, or model loading. The selected epoch is re-derived
