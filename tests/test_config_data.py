@@ -225,6 +225,24 @@ def test_default_loader_never_requests_the_publisher_test_split(monkeypatch) -> 
     assert [split for _, _, split in requested] == ["train"]
 
 
+@pytest.mark.parametrize("allow_test", [1, "true", object()])
+def test_loader_rejects_truthy_non_boolean_test_permission(
+    monkeypatch, allow_test
+) -> None:
+    requested = []
+
+    def fake_load_dataset(*args, **kwargs):
+        requested.append((args, kwargs))
+        raise AssertionError("invalid test permission must fail before dataset access")
+
+    monkeypatch.setattr("datasets.load_dataset", fake_load_dataset)
+
+    with pytest.raises(TypeError, match="allow_test must be a boolean"):
+        load_dataset(allow_test=allow_test)
+
+    assert requested == []
+
+
 def test_authorized_loader_requests_test_only_after_train(monkeypatch) -> None:
     requested = []
 

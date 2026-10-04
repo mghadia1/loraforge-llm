@@ -36,9 +36,10 @@ model-visible content, preventing repeated articles from silently receiving
 extra training weight or being counted more than once in evaluation.
 
 The default loader asks Hugging Face for `split="train"` only; it does not even
-request the publisher test split. A caller must explicitly set `allow_test=True`,
-which makes a separate `split="test"` request after checkpoint and temperature
-selection are frozen.
+request the publisher test split. A caller must explicitly set the exact boolean
+`allow_test=True`; truthy integer, string, and object aliases fail before any
+dataset access. The authorized path makes a separate `split="test"` request
+after checkpoint and temperature selection are frozen.
 
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
