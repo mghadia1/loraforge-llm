@@ -71,17 +71,32 @@ def verify_saved_adapter_config(
     # These optional PEFT features override or extend the simple frozen LoRA
     # contract. Missing fields are equivalent to their disabled defaults.
     disabled_features = {
+        "alora_invocation_tokens": (None,),
         "alpha_pattern": ({}, None),
+        "arrow_config": (None,),
+        "astra_config": (None,),
+        "corda_config": (None,),
+        "ensure_weight_tying": (False, None),
+        "eva_config": (None,),
         "rank_pattern": ({}, None),
         "exclude_modules": (None,),
+        "fan_in_fan_out": (False, None),
+        "init_lora_weights": (True, None),
+        "kasa_config": (None,),
         "layer_replication": (None,),
         "layers_to_transform": (None,),
+        "loftq_config": ({}, None),
+        "lora_ga_config": (None,),
+        "megatron_config": (None,),
+        "monteclora_config": (None,),
         "modules_to_save": (None,),
         "target_parameters": (None,),
         "trainable_token_indices": (None,),
+        "use_bdlora": (None,),
         "use_dora": (False, None),
         "use_qalora": (False, None),
         "use_rslora": (False, None),
+        "velora_config": (None,),
     }
     for field, allowed in disabled_features.items():
         if field in payload and not any(
