@@ -58,6 +58,36 @@ def test_class_codes_are_unique_single_tokens() -> None:
     assert class_code_token_ids(FakeTokenizer()) == (11, 12, 13, 14)
 
 
+@pytest.mark.parametrize("bad_id", [True, 20.5, -1])
+def test_chat_template_rejects_non_integer_or_negative_token_ids(bad_id) -> None:
+    class BrokenTokenizer(FakeTokenizer):
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            return [1, bad_id, 21] if tokenize else "<chat>"
+
+    with pytest.raises(ValueError, match="nonnegative integer token IDs"):
+        prompt_token_ids(BrokenTokenizer(), "story")
+
+
+@pytest.mark.parametrize("bad_id", [True, 11.5, -1])
+def test_class_code_rejects_coercible_token_id_aliases(bad_id) -> None:
+    class BrokenTokenizer(FakeTokenizer):
+        def encode(self, value, add_special_tokens=False):
+            encoded = super().encode(value, add_special_tokens=add_special_tokens)
+            return [*encoded[:-1], bad_id] if value == "<chat>A" else encoded
+
+    with pytest.raises(ValueError, match="nonnegative integer token IDs"):
+        class_code_token_ids(BrokenTokenizer())
+
+
+@pytest.mark.parametrize("bad_id", [True, 2.5, -1])
+def test_supervised_encoding_rejects_coercible_eos_token_id_aliases(bad_id) -> None:
+    class BrokenTokenizer(FakeTokenizer):
+        eos_token_id = bad_id
+
+    with pytest.raises(ValueError, match="nonnegative integer token IDs"):
+        encode_supervised_example(BrokenTokenizer(), "story", 0)
+
+
 def test_multi_token_code_is_rejected() -> None:
     class BrokenTokenizer(FakeTokenizer):
         def encode(self, value, add_special_tokens=False):
