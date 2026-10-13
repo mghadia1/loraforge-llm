@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .provenance import unique_json_loads
+
 
 DATASET_NAME = "fancyzhx/ag_news"
 DATASET_REVISION = "eb185aade064a813bc0b7f42de02595523103ca4"
@@ -333,4 +335,4 @@ def config_from_dict(value: Any) -> ExperimentConfig:
 
 def load_config(path: Path) -> ExperimentConfig:
     """Load and validate an exact, fully typed JSON experiment config."""
-    return config_from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+    return config_from_dict(unique_json_loads(Path(path).read_text(encoding="utf-8")))

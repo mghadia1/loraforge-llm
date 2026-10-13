@@ -30,6 +30,24 @@ class EvidenceError(RuntimeError):
     """Raised when a stored artifact disagrees with what its own data recomputes."""
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while refusing ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate JSON object key {name!r}")
+        result[name] = value
+    return result
+
+
+def unique_json_loads(text: str) -> Any:
+    """Parse JSON while requiring unique keys at every object level."""
+    return json.loads(
+        text,
+        object_pairs_hook=_unique_json_object,
+    )
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -257,4 +275,9 @@ def write_json(payload: dict[str, Any], path: Path) -> None:
 def read_json(path: Path) -> dict[str, Any]:
     if not Path(path).exists():
         raise EvidenceError(f"required artifact {path} does not exist")
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        return unique_json_loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as error:
+        raise EvidenceError(
+            f"required artifact {path} is not unambiguous JSON: {error}"
+        ) from error
