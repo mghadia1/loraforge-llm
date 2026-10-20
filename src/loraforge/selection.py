@@ -398,12 +398,41 @@ def verify_training_report(
 ) -> dict[str, Any]:
     """Re-derive selection and every validation metric from the saved logits."""
     from .qlora import verify_saved_adapter_config
-    from .training import select_checkpoint
+    from .training import check_baseline_agreement, select_checkpoint
 
     config = _verify_training_protocol(report, root=root)
     labels = _validation_labels(report, root, labels, config=config)
     base_logits = load_logits(report["base_validation_logits"], root=root)
     recompute_block(base_logits, labels, report["base_validation_metrics"], "base_validation")
+    expected_agreement = check_baseline_agreement(
+        report["base_validation_metrics"],
+        root / "outputs" / "base-validation.json",
+        config,
+    )
+    recorded_agreement = report.get("baseline_agreement")
+    if not isinstance(recorded_agreement, dict):
+        raise EvidenceError("training report baseline_agreement must be an object")
+    missing = expected_agreement.keys() - recorded_agreement.keys()
+    unexpected = recorded_agreement.keys() - expected_agreement.keys()
+    if missing or unexpected:
+        raise EvidenceError(
+            "training report baseline_agreement fields differ: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    for field, expected in expected_agreement.items():
+        recorded = recorded_agreement[field]
+        if isinstance(expected, float):
+            try:
+                _assert_close(f"baseline_agreement.{field}", recorded, expected)
+            except (TypeError, ValueError) as error:
+                raise EvidenceError(
+                    f"baseline_agreement.{field} must be a finite number"
+                ) from error
+        elif type(recorded) is not type(expected) or recorded != expected:
+            raise EvidenceError(
+                f"baseline_agreement.{field} recorded as {recorded!r} "
+                f"but recomputes to {expected!r}"
+            )
 
     records = []
     for entry in report["epochs"]:

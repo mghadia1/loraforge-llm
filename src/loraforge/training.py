@@ -11,7 +11,7 @@ import numpy as np
 
 from .collate import SupervisedCollator, build_supervised_features
 from .config import ExperimentConfig
-from .data import DatasetBundle
+from .data import CLASS_NAMES, DatasetBundle
 from .metrics import evaluation_block
 from .provenance import (
     EvidenceError,
@@ -153,11 +153,53 @@ def _base_validation_logits(model, tokenizer, bundle: DatasetBundle, config: Exp
         )
 
 
-def check_baseline_agreement(recomputed: dict[str, Any], phase_one_path: Path) -> dict[str, Any]:
-    """The re-scored base must reproduce the T4 phase-one baseline, or something moved."""
+def check_baseline_agreement(
+    recomputed: dict[str, Any],
+    phase_one_path: Path,
+    config: ExperimentConfig,
+) -> dict[str, Any]:
+    """Bind the re-scored base to the compatible phase-one validation artifact."""
     recorded = read_json(phase_one_path)
-    expected = recorded["metrics_before_temperature"]["macro_f1"]
-    actual = recomputed["macro_f1"]
+    if not isinstance(recorded, dict):
+        raise EvidenceError("phase-one baseline must be a JSON object")
+    expected_provenance = {
+        "schema_version": 1,
+        "model": config.model_name,
+        "model_revision": config.model_revision,
+        "split": "validation",
+        "test_evaluated": False,
+    }
+    for field, expected_value in expected_provenance.items():
+        actual_value = recorded.get(field)
+        if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+            raise EvidenceError(
+                f"phase-one baseline {field} does not match the training protocol"
+            )
+
+    metrics = recorded.get("metrics_before_temperature")
+    if not isinstance(metrics, dict):
+        raise EvidenceError("phase-one baseline metrics must be an object")
+    expected_rows = len(CLASS_NAMES) * config.data.validation_per_class
+    if type(metrics.get("rows")) is not int or metrics["rows"] != expected_rows:
+        raise EvidenceError(
+            "phase-one baseline row count does not match the validation protocol"
+        )
+    expected = metrics.get("macro_f1")
+    actual = recomputed.get("macro_f1")
+    if (
+        isinstance(expected, bool)
+        or not isinstance(expected, (int, float))
+        or not np.isfinite(expected)
+        or not 0.0 <= expected <= 1.0
+    ):
+        raise EvidenceError("phase-one baseline macro-F1 must be a finite value in [0, 1]")
+    if (
+        isinstance(actual, bool)
+        or not isinstance(actual, (int, float))
+        or not np.isfinite(actual)
+        or not 0.0 <= actual <= 1.0
+    ):
+        raise EvidenceError("re-scored base macro-F1 must be a finite value in [0, 1]")
     if abs(expected - actual) > BASELINE_AGREEMENT_TOLERANCE:
         raise EvidenceError(
             f"re-scored base macro-F1 {actual} disagrees with {phase_one_path} value {expected}; "
@@ -259,7 +301,7 @@ def train_qlora(
     base_logits = _base_validation_logits(model, tokenizer, bundle, config)
     base_metrics = evaluation_block(base_logits, bundle.validation.labels)
     baseline_agreement = check_baseline_agreement(
-        base_metrics, root / "outputs" / "base-validation.json"
+        base_metrics, root / "outputs" / "base-validation.json", config
     )
 
     recorder = _EpochRecorder(model, tokenizer, bundle, config, root)
