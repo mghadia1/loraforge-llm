@@ -186,7 +186,10 @@ be real entries rather than symlinks, so no executable weight can escape the
 evidence root while still passing a same-content hash check. Strict verification
 also parses every saved PEFT adapter config and binds its base-model identity,
 LoRA rank/alpha/dropout/bias, target modules, task type, and disabled override
-features to the typed experiment protocol. This catches an internally
+features to the typed experiment protocol. Alternative execution modes such as
+aLoRA invocation gating, Arrow routing, BD-LoRA, transposed weight layout, and
+automatic weight tying must remain disabled, as must initialization modes that
+would alter ordinary LoRA's base/adapter decomposition. This catches an internally
 hash-consistent adapter that was created with different semantics. The same
 check runs before the final inference adapter is attached. For a distributed
 selected adapter, every recorded
