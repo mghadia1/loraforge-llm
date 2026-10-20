@@ -50,3 +50,4 @@
 - 2026-10-05 09:00 MST — Made strict adapter verification reject unrecorded PEFT execution variants and base-mutating initialization modes; 302 tests and strict offline training-only evidence verification passed without loading publisher test.
 - 2026-10-06 09:00 MST — Made prompt, contextual class-code, and EOS tokenization reject boolean, fractional, and negative token-ID aliases instead of silently coercing them to different vocabulary indices.
 - 2026-10-13 09:00 MST — Made experiment-config and evidence JSON fail closed on duplicate object keys at every nesting level instead of silently applying last-value-wins parsing.
+- 2026-10-15 09:05 MST — Routed the fresh T4 notebook through the validated canonical config and guarded CLI in a new isolated run root; 288 tests and offline reports-only training evidence verification passed without loading publisher test.

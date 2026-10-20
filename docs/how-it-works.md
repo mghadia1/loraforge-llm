@@ -119,6 +119,14 @@ boundary merely to fail during scoring.
 
 ## Training the two frozen epochs
 
+The fresh T4 notebook starts training through the public `loraforge train`
+command with an explicit `configs/experiment.json` path. That makes the
+canonical, fully typed config the notebook's protocol source and keeps the CLI's
+preflight boundary in front of dataset and model loading. It copies the two
+phase-one prerequisites into a new ignored run root, refuses to reuse that root,
+and freezes and verifies the new run there; tracked evidence from the completed
+experiment therefore cannot block or be overwritten by the notebook.
+
 `build_supervised_features` encodes each training row and asserts that exactly
 two tokens — the answer code and EOS — escape the `-100` mask. `pad_batch`
 right-pads a batch: inputs with the pad ID, attention with `0`, labels with
