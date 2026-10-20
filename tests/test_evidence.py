@@ -25,6 +25,7 @@ from loraforge.provenance import (
     load_logits,
     read_json,
     save_logits,
+    sha256_array,
     sha256_directory,
     sha256_file,
     sha256_labels,
@@ -604,6 +605,64 @@ def test_logit_reference_shape_is_verified(tmp_path) -> None:
     reference["shape"] = [1, 4]
 
     with pytest.raises(EvidenceError, match="shape .* does not match the recorded"):
+        load_logits(reference, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (np.zeros((0, 4), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 1), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 4), dtype=np.float64), "must use float32"),
+        (np.zeros((3, 4), dtype=np.bool_), "must use float32"),
+        (np.full((3, 4), np.nan, dtype=np.float32), "only finite"),
+    ],
+)
+def test_saving_logits_rejects_noncanonical_payloads(
+    tmp_path, values, message
+) -> None:
+    with pytest.raises(EvidenceError, match=message):
+        save_logits(values, tmp_path, "outputs/logits/probe.npy")
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (np.zeros((0, 4), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 1), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 4), dtype=np.float64), "must use float32"),
+        (np.zeros((3, 4), dtype=np.bool_), "must use float32"),
+        (np.full((3, 4), np.inf, dtype=np.float32), "only finite"),
+    ],
+)
+def test_loading_logits_rejects_self_consistent_noncanonical_payloads(
+    tmp_path, values, message
+) -> None:
+    path = tmp_path / "outputs" / "logits" / "probe.npy"
+    path.parent.mkdir(parents=True)
+    np.save(path, values)
+    reference = {
+        "path": "outputs/logits/probe.npy",
+        "shape": list(values.shape),
+        "sha256": sha256_array(values),
+    }
+
+    with pytest.raises(EvidenceError, match=message):
+        load_logits(reference, root=tmp_path)
+
+
+@pytest.mark.parametrize("recorded_shape", [[True, 4], [3.0, 4], [3, True]])
+def test_logit_reference_shape_requires_exact_integer_metadata(
+    tmp_path, recorded_shape
+) -> None:
+    reference = save_logits(
+        np.zeros((3, 4), dtype=np.float32),
+        tmp_path,
+        "outputs/logits/probe.npy",
+    )
+    reference["shape"] = recorded_shape
+
+    with pytest.raises(EvidenceError, match="positive integer"):
         load_logits(reference, root=tmp_path)
 
 
