@@ -128,6 +128,13 @@ check against `outputs/base-validation.json`, validates the artifact's model,
 revision, split, locked-test state, and row count, and rejects a missing or
 edited `baseline_agreement` block in the training report.
 
+The training command also requires a fresh phase-two output area before it
+loads publisher data or the quantized model. Existing Trainer state, validation
+logits, epoch checkpoints, selected adapters, or downstream freeze/final-test
+artifacts make it fail closed. A failed GPU attempt must therefore be preserved
+and a retry must use a new run root; training never deletes or silently reuses
+partial evidence from an earlier attempt.
+
 After each epoch the adapter is saved, hashed, and scored on validation. The
 selection rule is one line: highest validation macro-F1, and an exact tie goes
 to the earlier epoch. Both checkpoints, their validation logits, the loss curve,

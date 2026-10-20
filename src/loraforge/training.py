@@ -72,6 +72,41 @@ def capture_pretraining_manifest(
     return manifest, reference
 
 
+def refuse_existing_training_outputs(root: Path) -> None:
+    """Require a fresh phase-two output area before any costly training setup.
+
+    A failed GPU run can leave checkpoints, logits, or Trainer state without ever
+    reaching ``training-report.json``. Reusing those paths would overwrite the
+    evidence from that attempt and make a later report ambiguous, so callers must
+    choose a new run root instead.
+    """
+    root = Path(root)
+    known_paths = {
+        root / "outputs" / "training-report.json",
+        root / PRETRAINING_MANIFEST_PATH,
+        root / "outputs" / "trainer",
+        root / "outputs" / "logits" / "base-validation.npy",
+        root / "outputs" / "frozen-selection.json",
+        root / "outputs" / "final-test-attempt.json",
+        root / "outputs" / "final-test-report.json",
+        root / "adapters" / "selected",
+    }
+    known_paths.update((root / "adapters").glob("epoch-*"))
+    known_paths.update(
+        (root / "outputs" / "logits").glob("tuned-validation-epoch-*.npy")
+    )
+    conflicts = sorted(
+        path.relative_to(root).as_posix()
+        for path in known_paths
+        if path.exists() or path.is_symlink()
+    )
+    if conflicts:
+        raise EvidenceError(
+            "training outputs already exist and must not be overwritten: "
+            f"{conflicts}; use a fresh run root and preserve the prior attempt"
+        )
+
+
 def select_checkpoint(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Highest validation macro-F1 wins; an exact tie goes to the earlier epoch."""
     if not records:
@@ -276,20 +311,12 @@ def train_qlora(
     root: Path = Path("."),
 ) -> dict[str, Any]:
     """Run the two frozen epochs and write ``outputs/training-report.json``."""
+    refuse_existing_training_outputs(root)
+
     import torch
     from transformers import Trainer, TrainingArguments
 
     root = Path(root)
-    if (root / "outputs" / "training-report.json").exists():
-        raise EvidenceError(
-            "outputs/training-report.json already exists; move it aside before retraining "
-            "so a failed run is never silently overwritten"
-        )
-    if (root / PRETRAINING_MANIFEST_PATH).exists():
-        raise EvidenceError(
-            f"{root / PRETRAINING_MANIFEST_PATH} already exists; move it aside before "
-            "retraining so a prior attempt's controls are preserved"
-        )
 
     torch.manual_seed(config.data.seed)
     # Audit first: this raises if any non-adapter weight is trainable, which is
@@ -344,8 +371,6 @@ def train_qlora(
     selected = select_checkpoint(recorder.records)
     selected_relative = "adapters/selected"
     selected_dir = root / selected_relative
-    if selected_dir.exists():
-        shutil.rmtree(selected_dir)
     shutil.copytree(root / selected["adapter_dir"], selected_dir)
 
     report = {
