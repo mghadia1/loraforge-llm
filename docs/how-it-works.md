@@ -88,6 +88,8 @@ Experiment JSON is parsed as an exact typed schema before any model or dataset
 work starts. Missing and unexpected fields are rejected instead of inheriting
 silent dataclass defaults, JSON booleans cannot stand in for integer counts,
 and every nested object and target-module array keeps its declared shape.
+Experiment configs and evidence artifacts reject duplicate object keys at every
+level rather than silently applying parser-specific last-value-wins semantics.
 
 The completed run's Tesla T4 identity is cross-checked between setup and
 training evidence, and the selected adapter's 167,838,575-byte size is checked

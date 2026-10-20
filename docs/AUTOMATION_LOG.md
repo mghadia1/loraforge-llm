@@ -49,3 +49,4 @@
 - 2026-10-04 09:05 MST — Required an exact boolean publisher-test opt-in before any dataset access, preventing truthy integer, string, or object aliases from crossing the held-out boundary; 290 tests and strict offline training-only evidence verification passed without loading publisher test.
 - 2026-10-05 09:00 MST — Made strict adapter verification reject unrecorded PEFT execution variants and base-mutating initialization modes; 302 tests and strict offline training-only evidence verification passed without loading publisher test.
 - 2026-10-06 09:00 MST — Made prompt, contextual class-code, and EOS tokenization reject boolean, fractional, and negative token-ID aliases instead of silently coercing them to different vocabulary indices.
+- 2026-10-13 09:00 MST — Made experiment-config and evidence JSON fail closed on duplicate object keys at every nesting level instead of silently applying last-value-wins parsing.
