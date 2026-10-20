@@ -131,6 +131,21 @@ to the earlier epoch. Both checkpoints, their validation logits, the loss curve,
 wall time, peak CUDA memory, package versions, and adapter hashes land in
 `outputs/training-report.json`.
 
+Future training reports use schema version 2. Immediately before optimizer
+training, the trainer writes `outputs/pretraining-manifest.json` with the typed
+config, resolved training arguments, audited parameter block, and environment,
+then retains that file's SHA-256 in memory for the final report. The manifest is
+never overwritten, and verification requires its hash and all copied controls
+to match. A mid-run or post-run edit therefore cannot turn a different GPU,
+package stack, config, or parameter audit into an apparently controlled run.
+Verification also applies an exact typed schema to the environment, resolved
+training arguments, and parameter audit: package keys must be complete, CUDA
+fields must be internally consistent, protocol arguments must match the typed
+config, and parameter totals must reproduce the recorded percentage. Rehashing
+matching but malformed control blocks therefore cannot make them valid evidence.
+The completed historical schema-v1 report remains verifiable but is explicitly
+legacy evidence without this second-artifact binding.
+
 ## Why the evidence is hashed
 
 Every reported number is recomputable from raw logits stored next to it, and
