@@ -119,6 +119,12 @@ right-pads a batch: inputs with the pad ID, attention with `0`, labels with
 `-100`, so padding contributes nothing to the loss either. This is deliberately
 not an off-the-shelf SFT text path, which would compute loss over the prompt.
 
+The configured warmup ratio is passed through when the installed Transformers
+version supports it. On versions that accept only an integer warmup-step count,
+LoRAForge uses the same ceiling conversion as `TrainingArguments`, including
+preserving a zero ratio as zero, so library compatibility cannot change the
+learning-rate schedule.
+
 Before the first optimizer step, the trainer re-scores validation with the
 adapter switched off and refuses to continue unless it reproduces the phase-one
 baseline macro-F1. That single check catches a changed prompt, tokenizer, or

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import time
 from pathlib import Path
@@ -284,7 +285,9 @@ def training_argument_kwargs(
     if "warmup_ratio" in supported:
         requested["warmup_ratio"] = config.training.warmup_ratio
     elif "warmup_steps" in supported:
-        requested["warmup_steps"] = max(1, round(config.training.warmup_ratio * total_optimizer_steps))
+        requested["warmup_steps"] = math.ceil(
+            config.training.warmup_ratio * total_optimizer_steps
+        )
     else:
         raise EvidenceError(
             "TrainingArguments accepts neither warmup_ratio nor warmup_steps; the frozen "
@@ -333,7 +336,6 @@ def train_qlora(
 
     recorder = _EpochRecorder(model, tokenizer, bundle, config, root)
     import inspect
-    import math
 
     effective_batch = (
         config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
