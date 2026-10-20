@@ -251,6 +251,10 @@ pins the selected adapter, its hashes, the validation metrics, and the two
 validation-fitted temperatures. The final command refuses to run unless that
 file exists, refuses if the adapter's hash has changed since, refuses without an
 explicit confirmation string, and refuses to overwrite an existing final report.
+Before GPU setup or publisher-test access, it validates the gate's exact schema
+and lifecycle timestamps, reloads publisher train only, and re-derives checkpoint
+selection, validation metrics, and both fitted temperatures. An edited or
+malformed gate therefore cannot consume the one allowed test attempt.
 It also revalidates the experiment config at the entry point: the test budget
 must be the JSON integer `1` (not boolean `true`), and `resume_eligible` must
 remain `false` until the separate explanation gate passes. Before model or
