@@ -36,11 +36,10 @@ Selected on **validation macro-F1** at epoch 2 of 2. The untuned base model was 
 - Data: `fancyzhx/ag_news` at revision `eb185aade064a813bc0b7f42de02595523103ca4`, 8,000 training and 2,000 validation rows, balanced across four classes, selected deterministically with seed 73
 - Quantization: 4-bit NF4, double quantization, float16 compute
 - LoRA: rank 4, alpha 8, dropout 0.05, targeting `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`
-- Trainable parameters: **10,485,760 (0.1445% of 7,258,509,312)**
+- Trainable-parameter and hardware claims are omitted because this run has no matching pre-training setup evidence
 - Optimization: 2 epochs, learning rate 0.0002, effective batch 16, paged_adamw_8bit, 3% warmup
 - Loss is computed **only** on the answer token and EOS; every prompt token is masked with `-100`
-- Hardware: Tesla T4, 4.02 h, peak 5.48 GiB CUDA
-- Adapter size: 42,008,469 bytes
+- Adapter-size claim omitted because no matching release manifest is present
 
 ## How the class is read
 
@@ -51,8 +50,8 @@ The prompt asks for one code — `A`=World, `B`=Sports, `C`=Business, `D`=Sci/Te
 - Trained and evaluated only on fancyzhx/ag_news: short English news headlines with a single topic label. Nothing here supports use on other domains, longer documents, or safety-critical decisions.
 - One seed, one hardware run. Test-set sampling uncertainty has been quantified for the reference run; training variance across seeds has not been measured.
 - Only 8,000 of the publisher's 120,000 training rows were used.
-- The comparison is against the same untuned base model, not against full fine-tuning or a different architecture. A TF-IDF and logistic-regression baseline reaches 0.887 validation macro-F1 in about a second of CPU time, so the adapter's advantage should be weighed against its cost.
-- Labels in this dataset are genuinely ambiguous between Business and Sci/Tech, which accounts for roughly half the remaining errors.
+- The comparison is against the same untuned base model, not against full fine-tuning, a different architecture, or a separately measured classical baseline.
+- The run records aggregate and per-class metrics, but no annotated error-analysis artifact; it therefore does not support causal claims about the remaining errors.
 
 ## Usage
 
@@ -63,9 +62,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 quantization = BitsAndBytesConfig(
     load_in_4bit=True, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True
 )
-tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3')
+revision = 'c170c708c41dac9275d15a8fff4eca08d52bab71'
+tokenizer = AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.3', revision=revision)
 base = AutoModelForCausalLM.from_pretrained(
-    'mistralai/Mistral-7B-Instruct-v0.3', quantization_config=quantization, device_map='auto'
+    'mistralai/Mistral-7B-Instruct-v0.3', revision=revision, quantization_config=quantization, device_map='auto'
 )
 model = PeftModel.from_pretrained(base, '<this-adapter>')
 ```
