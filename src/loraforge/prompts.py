@@ -60,13 +60,23 @@ def render_training_text(tokenizer: Any, text: str, label: int) -> str:
     )
 
 
+def _token_id(value: Any, *, source: str) -> int:
+    """Return one exact tokenizer ID without silently coercing aliases."""
+    if isinstance(value, bool) or not isinstance(value, Integral) or value < 0:
+        raise ValueError(
+            f"{source} must contain nonnegative integer token IDs; "
+            f"got {value!r} ({type(value).__name__})"
+        )
+    return int(value)
+
+
 def _flat_template_ids(encoded: Any) -> list[int]:
     ids = encoded["input_ids"] if hasattr(encoded, "keys") else encoded
     if len(ids) and isinstance(ids[0], (list, tuple)):
         if len(ids) != 1:
             raise ValueError(f"expected one prompt, tokenizer returned {len(ids)}")
         ids = ids[0]
-    flat = [int(value) for value in ids]
+    flat = [_token_id(value, source="chat-template output") for value in ids]
     if not flat:
         raise ValueError("tokenizer produced an empty prompt")
     return flat
@@ -90,7 +100,8 @@ def class_code_token_ids(tokenizer: Any) -> tuple[int, ...]:
     probe_text = "Tokenizer contract probe."
     probe_prompt = render_inference_prompt(tokenizer, probe_text)
     prompt_ids = [
-        int(value) for value in tokenizer.encode(probe_prompt, add_special_tokens=False)
+        _token_id(value, source="rendered-prompt encoding")
+        for value in tokenizer.encode(probe_prompt, add_special_tokens=False)
     ]
     tokenized_prompt_ids = prompt_token_ids(tokenizer, probe_text)
     if prompt_ids != tokenized_prompt_ids:
@@ -100,10 +111,15 @@ def class_code_token_ids(tokenizer: Any) -> tuple[int, ...]:
         )
     ids = []
     for code in CLASS_CODES:
-        encoded = tokenizer.encode(probe_prompt + code, add_special_tokens=False)
+        encoded = [
+            _token_id(value, source=f"class-code {code!r} encoding")
+            for value in tokenizer.encode(
+                probe_prompt + code, add_special_tokens=False
+            )
+        ]
         if len(encoded) != len(prompt_ids) + 1 or encoded[:-1] != prompt_ids:
             raise ValueError(f"class code {code!r} is not one contextual token")
-        ids.append(int(encoded[-1]))
+        ids.append(encoded[-1])
     if len(ids) != len(set(ids)):
         raise ValueError("class codes do not map to unique tokens")
     return tuple(ids)
@@ -121,17 +137,18 @@ def encode_supervised_example(
     eos_id = tokenizer.eos_token_id
     if eos_id is None:
         raise ValueError("tokenizer has no EOS token")
+    eos_id = _token_id(eos_id, source="tokenizer EOS token ID")
     formatted_length = len(prompt_ids) + 2
     if formatted_length > max_length:
         raise ValueError(
             f"formatted example has {formatted_length} tokens, exceeding frozen max {max_length}"
         )
     answer_id = class_code_token_ids(tokenizer)[label]
-    input_ids = [*prompt_ids, answer_id, int(eos_id)]
+    input_ids = [*prompt_ids, answer_id, eos_id]
     return {
         "input_ids": input_ids,
         "attention_mask": [1] * len(input_ids),
-        "labels": [-100] * len(prompt_ids) + [answer_id, int(eos_id)],
+        "labels": [-100] * len(prompt_ids) + [answer_id, eos_id],
     }
 
 

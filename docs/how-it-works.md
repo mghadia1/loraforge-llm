@@ -15,7 +15,10 @@ and fails if appending a code is not exactly one token. It also proves that
 direct chat-template tokenization exactly matches encoding the rendered prompt
 used to derive those contextual IDs; a tokenizer-library drift cannot silently
 make scoring use a different token context. The prompt itself is tokenized
-directly, avoiding a duplicated beginning-of-sequence token.
+directly, avoiding a duplicated beginning-of-sequence token. Every prompt,
+class-code, and EOS token ID must be an exact nonnegative integer; boolean,
+fractional, and negative aliases are rejected instead of being silently
+coerced to different vocabulary indices.
 Prompt construction rejects booleans and other non-integer label aliases, and
 the scorer validates nonempty input plus positive integer batch/length controls
 before importing Torch or touching a model.
