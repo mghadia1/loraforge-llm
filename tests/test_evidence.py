@@ -307,6 +307,29 @@ def test_hand_edited_per_class_metric_is_rejected(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("confusion_matrix", 0, 2), False),
+        (("confusion_matrix", 1, 0), True),
+        (("invalid_prediction_rate",), False),
+    ],
+)
+def test_boolean_metric_scalars_cannot_alias_numeric_evidence(
+    tmp_path, path, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    metric = report["base_validation_metrics"]
+    target = metric
+    for key in path[:-1]:
+        target = target[key]
+    assert target[path[-1]] == replacement
+    target[path[-1]] = replacement
+
+    with pytest.raises(EvidenceError, match="base_validation"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
     ("path", "replacement", "message"),
     [
         (("schema_version",), True, "schema_version"),
