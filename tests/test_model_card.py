@@ -237,6 +237,7 @@ def test_unverified_resource_claims_are_not_published(tmp_path) -> None:
         "docs/STATUS.md",
         "docs/how-it-works.md",
         "docs/LEARNING_GUIDE.md",
+        "docs/ABLATION_RANK4.md",
     ],
 )
 def test_primary_public_docs_omit_uncorroborated_training_resources(
@@ -250,6 +251,10 @@ def test_primary_public_docs_omit_uncorroborated_training_resources(
         "12.34 GiB",
         "41,943,040",
         "roughly 0.6%",
+        "10,485,760",
+        "42,008,469",
+        "14,487.9",
+        "5.48 GiB",
     ):
         assert unsupported_claim not in text
 

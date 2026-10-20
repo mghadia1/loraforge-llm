@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare = commands.add_parser(
         "compare-runs",
-        help="diff two training runs and refuse to call the comparison controlled if it is not",
+        help="verify two training runs and check their recorded controls for drift",
     )
     compare.add_argument("baseline", type=Path, help="baseline training-report.json")
     compare.add_argument("variant", type=Path, help="variant training-report.json")
@@ -77,7 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="dotted config field the ablation intends to change, e.g. lora.rank",
     )
     compare.add_argument(
-        "--strict", action="store_true", help="exit non-zero unless the comparison is controlled"
+        "--strict",
+        action="store_true",
+        help="exit non-zero unless validation evidence verifies and recorded controls match",
     )
 
     card = commands.add_parser(
@@ -174,14 +176,17 @@ def main() -> int:
         return 0
 
     if args.command == "compare-runs":
-        from .compare import compare_report_files, require_controlled
+        from .compare import compare_report_files, require_strict_comparison
 
         comparison = compare_report_files(
-            args.baseline, args.variant, expected_config_changes=set(args.expect_change)
+            args.baseline,
+            args.variant,
+            expected_config_changes=set(args.expect_change),
+            verify_evidence=args.strict,
         )
         print(json.dumps(comparison, indent=2))
         if args.strict:
-            require_controlled(comparison)
+            require_strict_comparison(comparison, require_verified_evidence=True)
         return 0
 
     if args.command == "model-card":
