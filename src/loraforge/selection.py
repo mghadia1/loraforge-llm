@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,10 +11,14 @@ import numpy as np
 
 from .metrics import evaluation_block, fit_temperature, softmax
 from .provenance import (
+    AUDITED_PACKAGES,
     EvidenceError,
+    PRETRAINING_MANIFEST_PATH,
     load_logits,
     read_json,
     resolve_adapter_directory,
+    resolve_evidence_file,
+    sha256_file,
     utc_now,
     verify_directory_snapshot,
     write_json,
@@ -24,6 +29,83 @@ METRIC_TOLERANCE = 1e-9
 TRAINING_REPORT = Path("outputs/training-report.json")
 FROZEN_SELECTION = Path("outputs/frozen-selection.json")
 SELECTION_RULE = "max validation macro_f1; exact tie resolved to the earlier epoch"
+FROZEN_SELECTION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "test_evaluated",
+        "model",
+        "model_revision",
+        "selected_epoch",
+        "selected_adapter_dir",
+        "selected_adapter_hashes",
+        "selection_rule",
+        "validation_label_sha256",
+        "validation",
+    }
+)
+
+
+def _frozen_timestamp(name: str, value: Any) -> datetime:
+    if type(value) is not str or not value.endswith("Z"):
+        raise EvidenceError(f"frozen selection {name} must be a UTC timestamp ending in Z")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise EvidenceError(
+            f"frozen selection {name} must be a valid UTC timestamp"
+        ) from error
+    if parsed.tzinfo != UTC:
+        raise EvidenceError(f"frozen selection {name} must be in UTC")
+    return parsed
+
+
+def _verify_frozen_envelope(frozen: Any) -> None:
+    """Validate the exact schema and lifecycle state of the one-run gate."""
+    if type(frozen) is not dict:
+        raise EvidenceError("frozen selection must be a JSON object")
+    if type(frozen.get("schema_version")) is not int or frozen["schema_version"] != 1:
+        raise EvidenceError("frozen selection schema_version must be the integer 1")
+    created_at = _frozen_timestamp("created_at_utc", frozen.get("created_at_utc"))
+    test_evaluated = frozen.get("test_evaluated")
+    if type(test_evaluated) is not bool:
+        raise EvidenceError("frozen selection test_evaluated must be a JSON boolean")
+
+    expected_fields = set(FROZEN_SELECTION_FIELDS)
+    if test_evaluated:
+        expected_fields.add("test_evaluated_at_utc")
+    actual_fields = set(frozen)
+    if actual_fields != expected_fields:
+        raise EvidenceError(
+            "frozen selection fields differ from schema: "
+            f"missing={sorted(expected_fields - actual_fields)}, "
+            f"unexpected={sorted(actual_fields - expected_fields)}"
+        )
+    if test_evaluated:
+        evaluated_at = _frozen_timestamp(
+            "test_evaluated_at_utc", frozen["test_evaluated_at_utc"]
+        )
+        if evaluated_at < created_at:
+            raise EvidenceError(
+                "frozen selection test_evaluated_at_utc predates created_at_utc"
+            )
+
+    validation = frozen.get("validation")
+    if type(validation) is not dict or set(validation) != {"base", "tuned"}:
+        raise EvidenceError(
+            "frozen selection validation must contain exactly base and tuned systems"
+        )
+    expected_system_fields = {
+        "logits",
+        "metrics",
+        "temperature",
+        "metrics_after_temperature",
+    }
+    for name, system in validation.items():
+        if type(system) is not dict or set(system) != expected_system_fields:
+            raise EvidenceError(
+                f"frozen selection validation.{name} fields differ from schema"
+            )
 
 
 def _assert_close(name: str, recorded: float, recomputed: float) -> None:
@@ -63,12 +145,14 @@ def _assert_metric_tree(name: str, recorded: Any, recomputed: Any) -> None:
             _assert_metric_tree(f"{name}[{index}]", recorded[index], value)
         return
     if isinstance(recomputed, float):
+        if isinstance(recorded, bool) or not isinstance(recorded, (int, float)):
+            raise EvidenceError(f"{name} must be a finite number")
         try:
             _assert_close(name, recorded, recomputed)
         except (TypeError, ValueError) as error:
             raise EvidenceError(f"{name} must be a finite number") from error
         return
-    if recorded != recomputed:
+    if type(recorded) is not type(recomputed) or recorded != recomputed:
         raise EvidenceError(
             f"{name} recorded as {recorded!r} but its own logits recompute to {recomputed!r}"
         )
@@ -94,13 +178,268 @@ def training_report_config(report: dict[str, Any]):
         ) from error
 
 
-def _verify_training_protocol(report: dict[str, Any]):
+def _manifest_object(manifest: dict[str, Any], field: str) -> dict[str, Any]:
+    value = manifest.get(field)
+    if type(value) is not dict:
+        raise EvidenceError(f"pre-training manifest {field} must be a JSON object")
+    return value
+
+
+def _verify_manifest_environment(manifest: dict[str, Any]) -> None:
+    recorded = _manifest_object(manifest, "environment")
+    required = {"python", "platform", "packages", "gpu_name", "cuda_available"}
+    optional = {"cuda_version"}
+    missing = required - recorded.keys()
+    unexpected = recorded.keys() - required - optional
+    if missing or unexpected:
+        raise EvidenceError(
+            "pre-training manifest environment fields differ from schema: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    for field in ("python", "platform"):
+        if type(recorded[field]) is not str or not recorded[field]:
+            raise EvidenceError(
+                f"pre-training manifest environment.{field} must be a nonempty string"
+            )
+    packages = recorded["packages"]
+    if type(packages) is not dict or set(packages) != set(AUDITED_PACKAGES):
+        raise EvidenceError(
+            "pre-training manifest environment.packages must contain exactly the "
+            "audited package versions"
+        )
+    if any(type(value) is not str or not value for value in packages.values()):
+        raise EvidenceError(
+            "pre-training manifest environment package versions must be nonempty strings"
+        )
+    cuda_available = recorded["cuda_available"]
+    if type(cuda_available) is not bool:
+        raise EvidenceError(
+            "pre-training manifest environment.cuda_available must be a JSON boolean"
+        )
+    if cuda_available:
+        for field in ("gpu_name", "cuda_version"):
+            if type(recorded.get(field)) is not str or not recorded[field]:
+                raise EvidenceError(
+                    f"pre-training manifest environment.{field} must be a nonempty "
+                    "string when CUDA is available"
+                )
+    elif recorded["gpu_name"] is not None or "cuda_version" in recorded:
+        raise EvidenceError(
+            "pre-training manifest environment cannot claim GPU/CUDA details when "
+            "CUDA is unavailable"
+        )
+
+
+def _verify_manifest_training_arguments(manifest: dict[str, Any], config) -> None:
+    from .data import CLASS_NAMES
+
+    recorded = _manifest_object(manifest, "training_arguments")
+    required = {
+        "output_dir",
+        "num_train_epochs",
+        "learning_rate",
+        "per_device_train_batch_size",
+        "gradient_accumulation_steps",
+        "gradient_checkpointing",
+        "optim",
+        "fp16",
+        "seed",
+    }
+    optional = {
+        "logging_steps",
+        "save_strategy",
+        "report_to",
+        "remove_unused_columns",
+        "warmup_ratio",
+        "warmup_steps",
+    }
+    missing = required - recorded.keys()
+    unexpected = recorded.keys() - required - optional
+    if missing or unexpected:
+        raise EvidenceError(
+            "pre-training manifest training_arguments fields differ from schema: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    expected = {
+        "num_train_epochs": config.training.epochs,
+        "learning_rate": config.training.learning_rate,
+        "per_device_train_batch_size": config.training.per_device_train_batch_size,
+        "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
+        "gradient_checkpointing": config.training.gradient_checkpointing,
+        "optim": config.training.optimizer,
+        "fp16": config.quantization.compute_dtype == "float16",
+        "seed": config.data.seed,
+    }
+    for field, value in expected.items():
+        actual = recorded[field]
+        if type(actual) is not type(value) or actual != value:
+            raise EvidenceError(
+                f"pre-training manifest training_arguments.{field} does not match config"
+            )
+    if type(recorded["output_dir"]) is not str or not recorded["output_dir"]:
+        raise EvidenceError(
+            "pre-training manifest training_arguments.output_dir must be a nonempty string"
+        )
+    warmup_fields = {"warmup_ratio", "warmup_steps"} & recorded.keys()
+    if len(warmup_fields) != 1:
+        raise EvidenceError(
+            "pre-training manifest training_arguments must contain exactly one warmup control"
+        )
+    if "warmup_ratio" in recorded:
+        if (
+            type(recorded["warmup_ratio"]) not in (int, float)
+            or not math.isfinite(recorded["warmup_ratio"])
+            or recorded["warmup_ratio"] != config.training.warmup_ratio
+        ):
+            raise EvidenceError(
+                "pre-training manifest training_arguments.warmup_ratio does not match config"
+            )
+    else:
+        effective_batch = (
+            config.training.per_device_train_batch_size
+            * config.training.gradient_accumulation_steps
+        )
+        train_rows = len(CLASS_NAMES) * config.data.train_per_class
+        optimizer_steps = math.ceil(train_rows / effective_batch) * config.training.epochs
+        expected_steps = max(1, round(config.training.warmup_ratio * optimizer_steps))
+        if type(recorded["warmup_steps"]) is not int or recorded["warmup_steps"] != expected_steps:
+            raise EvidenceError(
+                "pre-training manifest training_arguments.warmup_steps does not match config"
+            )
+    cosmetic = {
+        "logging_steps": 10,
+        "save_strategy": "no",
+        "report_to": [],
+        "remove_unused_columns": False,
+    }
+    for field, value in cosmetic.items():
+        if field in recorded and (
+            type(recorded[field]) is not type(value) or recorded[field] != value
+        ):
+            raise EvidenceError(
+                f"pre-training manifest training_arguments.{field} is invalid"
+            )
+
+
+def _verify_manifest_parameters(manifest: dict[str, Any]) -> None:
+    recorded = _manifest_object(manifest, "parameters")
+    expected_fields = {
+        "total_parameters",
+        "trainable_parameters",
+        "trainable_percent",
+        "stored_tensor_elements",
+        "counting_note",
+        "only_lora_parameters_trainable",
+    }
+    if set(recorded) != expected_fields:
+        raise EvidenceError(
+            "pre-training manifest parameters fields differ from schema"
+        )
+    for field in ("total_parameters", "trainable_parameters", "stored_tensor_elements"):
+        if type(recorded[field]) is not int or recorded[field] <= 0:
+            raise EvidenceError(
+                f"pre-training manifest parameters.{field} must be a positive integer"
+            )
+    total = recorded["total_parameters"]
+    trainable = recorded["trainable_parameters"]
+    stored = recorded["stored_tensor_elements"]
+    if trainable > total or stored > total:
+        raise EvidenceError(
+            "pre-training manifest parameter counts are internally inconsistent"
+        )
+    percentage = recorded["trainable_percent"]
+    if (
+        type(percentage) is not float
+        or not math.isfinite(percentage)
+        or abs(percentage - (100 * trainable / total)) > 1e-12
+    ):
+        raise EvidenceError(
+            "pre-training manifest parameters.trainable_percent does not match its counts"
+        )
+    if type(recorded["counting_note"]) is not str or not recorded["counting_note"]:
+        raise EvidenceError(
+            "pre-training manifest parameters.counting_note must be a nonempty string"
+        )
+    if recorded["only_lora_parameters_trainable"] is not True:
+        raise EvidenceError(
+            "pre-training manifest must record that only LoRA parameters are trainable"
+        )
+
+
+def _verify_pretraining_manifest(report: dict[str, Any], root: Path, config) -> None:
+    """Bind schema-v2 training controls to the file captured before training."""
+    reference = report.get("pretraining_manifest")
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+        raise EvidenceError(
+            "schema-v2 training report must contain an exact pretraining_manifest reference"
+        )
+    if reference.get("path") != PRETRAINING_MANIFEST_PATH:
+        raise EvidenceError(
+            "pre-training manifest must use the canonical outputs path"
+        )
+    target = resolve_evidence_file(
+        root,
+        reference["path"],
+        label="pre-training manifest",
+        suffix=".json",
+    )
+    if not target.is_file():
+        raise EvidenceError(f"required pre-training manifest {target} does not exist")
+    actual_sha256 = sha256_file(target)
+    if reference.get("sha256") != actual_sha256:
+        raise EvidenceError(
+            "pre-training manifest hash does not match the training report reference"
+        )
+
+    manifest = read_json(target)
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "stage",
+        "test_loaded",
+        "config",
+        "environment",
+        "training_arguments",
+        "parameters",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_fields:
+        raise EvidenceError("pre-training manifest fields do not match schema version 1")
+    if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
+        raise EvidenceError("pre-training manifest schema_version must be integer 1")
+    if (
+        not isinstance(manifest.get("created_at_utc"), str)
+        or not manifest["created_at_utc"].endswith("Z")
+    ):
+        raise EvidenceError("pre-training manifest created_at_utc must be a UTC timestamp")
+    if manifest.get("stage") != "before_optimizer_training":
+        raise EvidenceError("pre-training manifest stage is not before optimizer training")
+    if manifest.get("test_loaded") is not False:
+        raise EvidenceError("pre-training manifest must keep publisher test locked")
+    _verify_manifest_environment(manifest)
+    _verify_manifest_training_arguments(manifest, config)
+    _verify_manifest_parameters(manifest)
+    for field in ("config", "environment", "training_arguments", "parameters"):
+        if manifest.get(field) != report.get(field):
+            raise EvidenceError(
+                f"training report {field} does not match its hash-bound pre-training manifest"
+            )
+
+
+def _verify_training_protocol(report: dict[str, Any], *, root: Path = Path(".")):
     """Bind copied training-report provenance and counts to its validated config."""
     from .data import CLASS_NAMES
 
     config = training_report_config(report)
+    schema_version = report.get("schema_version")
+    if type(schema_version) is not int or schema_version not in (1, 2):
+        raise EvidenceError("training report schema_version must be integer 1 or 2")
+    if schema_version == 2:
+        _verify_pretraining_manifest(report, root, config)
+    elif "pretraining_manifest" in report:
+        raise EvidenceError(
+            "schema-v1 training report cannot claim a pre-training manifest"
+        )
     expected = {
-        "schema_version": 1,
         "model": config.model_name,
         "model_revision": config.model_revision,
         "test_evaluated": False,
@@ -139,12 +478,41 @@ def verify_training_report(
 ) -> dict[str, Any]:
     """Re-derive selection and every validation metric from the saved logits."""
     from .qlora import verify_saved_adapter_config
-    from .training import select_checkpoint
+    from .training import check_baseline_agreement, select_checkpoint
 
-    config = _verify_training_protocol(report)
+    config = _verify_training_protocol(report, root=root)
     labels = _validation_labels(report, root, labels, config=config)
     base_logits = load_logits(report["base_validation_logits"], root=root)
     recompute_block(base_logits, labels, report["base_validation_metrics"], "base_validation")
+    expected_agreement = check_baseline_agreement(
+        report["base_validation_metrics"],
+        root / "outputs" / "base-validation.json",
+        config,
+    )
+    recorded_agreement = report.get("baseline_agreement")
+    if not isinstance(recorded_agreement, dict):
+        raise EvidenceError("training report baseline_agreement must be an object")
+    missing = expected_agreement.keys() - recorded_agreement.keys()
+    unexpected = recorded_agreement.keys() - expected_agreement.keys()
+    if missing or unexpected:
+        raise EvidenceError(
+            "training report baseline_agreement fields differ: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+    for field, expected in expected_agreement.items():
+        recorded = recorded_agreement[field]
+        if isinstance(expected, float):
+            try:
+                _assert_close(f"baseline_agreement.{field}", recorded, expected)
+            except (TypeError, ValueError) as error:
+                raise EvidenceError(
+                    f"baseline_agreement.{field} must be a finite number"
+                ) from error
+        elif type(recorded) is not type(expected) or recorded != expected:
+            raise EvidenceError(
+                f"baseline_agreement.{field} recorded as {recorded!r} "
+                f"but recomputes to {expected!r}"
+            )
 
     records = []
     for entry in report["epochs"]:
@@ -295,6 +663,7 @@ def verify_frozen_selection(
         report, root=root, labels=labels, verify_adapters=False
     )
     frozen = read_json(root / FROZEN_SELECTION)
+    _verify_frozen_envelope(frozen)
     expected_gate = {
         "model": report["model"],
         "model_revision": report["model_revision"],
@@ -305,7 +674,8 @@ def verify_frozen_selection(
         "validation_label_sha256": report["validation_label_sha256"],
     }
     for field, expected in expected_gate.items():
-        if frozen.get(field) != expected:
+        actual = frozen.get(field)
+        if type(actual) is not type(expected) or actual != expected:
             raise EvidenceError(f"frozen selection {field} does not match training evidence")
 
     sources = {
@@ -346,6 +716,7 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
     """Load the gate file and refuse to continue unless the adapter still matches it."""
     root = Path(root)
     frozen = read_json(root / FROZEN_SELECTION)
+    _verify_frozen_envelope(frozen)
     adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
     if not adapter_dir.is_dir():
         raise EvidenceError(f"selected adapter {adapter_dir} is missing")
@@ -359,6 +730,6 @@ def require_frozen_selection(*, root: Path = Path(".")) -> dict[str, Any]:
         raise EvidenceError(
             "the selected adapter changed after selection was frozen; test evaluation refused"
         ) from error
-    if frozen.get("test_evaluated"):
+    if frozen["test_evaluated"]:
         raise EvidenceError("frozen selection is already marked as test-evaluated")
     return frozen

@@ -20,11 +20,14 @@ from loraforge.final_test import (
 )
 from loraforge.metrics import evaluation_block, fit_temperature
 from loraforge.provenance import (
+    AUDITED_PACKAGES,
     EvidenceError,
     load_logits,
     read_json,
     save_logits,
+    sha256_array,
     sha256_directory,
+    sha256_file,
     sha256_labels,
     verify_directory_snapshot,
     write_json,
@@ -32,6 +35,7 @@ from loraforge.provenance import (
 from loraforge.selection import (
     build_frozen_selection,
     require_frozen_selection,
+    verify_frozen_selection,
     verify_training_report,
 )
 
@@ -107,6 +111,18 @@ def make_training_run(
         root, "adapters/selected", f"weights-{best['epoch']}"
     )
     config = synthetic_config()
+    base_metrics = evaluation_block(base_logits, LABELS)
+    write_json(
+        {
+            "schema_version": 1,
+            "model": config.model_name,
+            "model_revision": config.model_revision,
+            "split": "validation",
+            "test_evaluated": False,
+            "metrics_before_temperature": base_metrics,
+        },
+        root / "outputs" / "base-validation.json",
+    )
     report = {
         "schema_version": 1,
         "model": config.model_name,
@@ -116,7 +132,14 @@ def make_training_run(
         "train_rows": 40,
         "validation_rows": len(LABELS),
         "validation_label_sha256": sha256_labels(LABELS),
-        "base_validation_metrics": evaluation_block(base_logits, LABELS),
+        "baseline_agreement": {
+            "phase_one_macro_f1": base_metrics["macro_f1"],
+            "rescored_macro_f1": base_metrics["macro_f1"],
+            "absolute_difference": 0.0,
+            "tolerance": 0.005,
+            "agrees": True,
+        },
+        "base_validation_metrics": base_metrics,
         "base_validation_logits": save_logits(
             base_logits, root, "outputs/logits/base-validation.npy"
         ),
@@ -132,6 +155,60 @@ def make_training_run(
     return report
 
 
+def upgrade_to_manifest_bound_report(root: Path, report: dict) -> dict:
+    config = synthetic_config()
+    total_parameters = 7_250_000_000
+    trainable_parameters = 41_943_040
+    report["schema_version"] = 2
+    report["environment"] = {
+        "python": "3.12.0",
+        "platform": "test-host",
+        "packages": {name: "test-version" for name in AUDITED_PACKAGES},
+        "gpu_name": "Tesla T4",
+        "cuda_available": True,
+        "cuda_version": "12.8",
+    }
+    report["training_arguments"] = {
+        "output_dir": str(root / "outputs" / "trainer"),
+        "num_train_epochs": config.training.epochs,
+        "learning_rate": config.training.learning_rate,
+        "per_device_train_batch_size": config.training.per_device_train_batch_size,
+        "gradient_accumulation_steps": config.training.gradient_accumulation_steps,
+        "gradient_checkpointing": config.training.gradient_checkpointing,
+        "optim": config.training.optimizer,
+        "fp16": True,
+        "seed": config.data.seed,
+        "warmup_ratio": config.training.warmup_ratio,
+    }
+    report["parameters"] = {
+        "total_parameters": total_parameters,
+        "trainable_parameters": trainable_parameters,
+        "trainable_percent": 100 * trainable_parameters / total_parameters,
+        "stored_tensor_elements": 3_625_000_000,
+        "counting_note": "synthetic parameter audit",
+        "only_lora_parameters_trainable": True,
+    }
+    manifest_path = root / "outputs" / "pretraining-manifest.json"
+    write_json(
+        {
+            "schema_version": 1,
+            "created_at_utc": "2026-09-25T16:00:00Z",
+            "stage": "before_optimizer_training",
+            "test_loaded": False,
+            "config": report["config"],
+            "environment": report["environment"],
+            "training_arguments": report["training_arguments"],
+            "parameters": report["parameters"],
+        },
+        manifest_path,
+    )
+    report["pretraining_manifest"] = {
+        "path": "outputs/pretraining-manifest.json",
+        "sha256": sha256_file(manifest_path),
+    }
+    return report
+
+
 def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     frozen = read_json(root / "outputs" / "frozen-selection.json")
     training = read_json(root / "outputs" / "training-report.json")
@@ -141,7 +218,7 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     tuned = _system_block(tuned_logits, LABELS, frozen["validation"]["tuned"]["temperature"], 3.2)
     report = {
         "schema_version": 1,
-        "created_at_utc": "2026-01-01T00:00:00Z",
+        "created_at_utc": frozen["created_at_utc"],
         "test_evaluated": True,
         "test_evaluations_run": 1,
         "split": "publisher test",
@@ -194,6 +271,40 @@ def test_frozen_selection_records_two_separate_validation_temperatures(tmp_path)
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("schema_version", True, "schema_version"),
+        ("created_at_utc", "not-a-timestamp", "created_at_utc"),
+        ("test_evaluated", 0, "test_evaluated"),
+    ],
+)
+def test_frozen_selection_envelope_is_strictly_typed(
+    tmp_path, field, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen[field] = replacement
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_frozen_selection(root=tmp_path, labels=LABELS)
+
+
+def test_frozen_selection_rejects_unsupported_top_level_claims(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["unsupported_claim"] = "unverified"
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="unexpected=.*unsupported_claim"):
+        verify_frozen_selection(root=tmp_path, labels=LABELS)
+
+
 def test_selection_tie_break_is_honoured_end_to_end(tmp_path) -> None:
     make_training_run(tmp_path, epoch_margins=(2.5, 2.5), epoch_seeds=(12, 12))
     report = read_json(tmp_path / "outputs" / "training-report.json")
@@ -228,6 +339,29 @@ def test_hand_edited_per_class_metric_is_rejected(tmp_path) -> None:
     report["epochs"][1]["validation"]["per_class"]["World"]["recall"] = 0.99
 
     with pytest.raises(EvidenceError, match=r"epoch-2\.per_class\.World\.recall"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("confusion_matrix", 0, 2), False),
+        (("confusion_matrix", 1, 0), True),
+        (("invalid_prediction_rate",), False),
+    ],
+)
+def test_boolean_metric_scalars_cannot_alias_numeric_evidence(
+    tmp_path, path, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    metric = report["base_validation_metrics"]
+    target = metric
+    for key in path[:-1]:
+        target = target[key]
+    assert target[path[-1]] == replacement
+    target[path[-1]] = replacement
+
+    with pytest.raises(EvidenceError, match="base_validation"):
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 
@@ -275,6 +409,173 @@ def test_training_report_selection_rule_is_frozen(tmp_path) -> None:
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 
+def test_manifest_bound_training_report_verifies(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+
+    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+
+def test_manifest_bound_training_report_accepts_resolved_warmup_steps(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    del manifest["training_arguments"]["warmup_ratio"]
+    manifest["training_arguments"]["warmup_steps"] = 1
+    report["training_arguments"] = manifest["training_arguments"]
+    write_json(manifest, path)
+    report["pretraining_manifest"]["sha256"] = sha256_file(path)
+
+    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+
+def test_schema_v2_training_report_requires_the_pretraining_manifest(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    report["schema_version"] = 2
+
+    with pytest.raises(EvidenceError, match="pretraining_manifest reference"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_edited_pretraining_manifest_is_rejected_by_its_retained_hash(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest["environment"]["gpu_name"] = "Imaginary H100"
+    write_json(manifest, path)
+
+    with pytest.raises(EvidenceError, match="manifest hash"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_rehashed_manifest_must_still_match_the_training_report(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest["environment"]["gpu_name"] = "Imaginary H100"
+    write_json(manifest, path)
+    report["pretraining_manifest"]["sha256"] = sha256_file(path)
+
+    with pytest.raises(EvidenceError, match="environment does not match"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize("field", ["environment", "training_arguments", "parameters"])
+def test_manifest_control_blocks_keep_their_declared_object_types(
+    tmp_path, field
+) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest[field] = []
+    report[field] = []
+    write_json(manifest, path)
+    report["pretraining_manifest"]["sha256"] = sha256_file(path)
+
+    with pytest.raises(EvidenceError, match=rf"pre-training manifest {field}"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "message"),
+    [
+        (("environment", "packages"), {}, "audited package versions"),
+        (("environment", "cuda_available"), 1, "JSON boolean"),
+        (("training_arguments", "num_train_epochs"), True, "does not match config"),
+        (("training_arguments", "warmup_ratio"), True, "does not match config"),
+        (("parameters", "total_parameters"), True, "positive integer"),
+        (("parameters", "trainable_percent"), 0.0, "does not match its counts"),
+        (
+            ("parameters", "only_lora_parameters_trainable"),
+            False,
+            "only LoRA parameters",
+        ),
+    ],
+)
+def test_manifest_control_values_keep_their_declared_schema(
+    tmp_path, path, replacement, message
+) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    manifest_path = tmp_path / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(manifest_path)
+    manifest[path[0]][path[1]] = replacement
+    report[path[0]][path[1]] = replacement
+    write_json(manifest, manifest_path)
+    report["pretraining_manifest"]["sha256"] = sha256_file(manifest_path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_pretraining_manifest_path_cannot_escape_the_evidence_root(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    report["pretraining_manifest"]["path"] = "../pretraining-manifest.json"
+
+    with pytest.raises(EvidenceError, match="canonical outputs path"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_training_report_requires_the_phase_one_baseline_agreement(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    del report["baseline_agreement"]
+
+    with pytest.raises(EvidenceError, match="baseline_agreement must be an object"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("phase_one_macro_f1", 0.5),
+        ("rescored_macro_f1", 0.5),
+        ("absolute_difference", 0.5),
+        ("tolerance", 0.5),
+        ("agrees", 1),
+    ],
+)
+def test_training_report_baseline_agreement_is_recomputed(
+    tmp_path, field, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    report["baseline_agreement"][field] = replacement
+
+    with pytest.raises(EvidenceError, match=rf"baseline_agreement\.{field}"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("schema_version", True),
+        ("model", "unrelated/model"),
+        ("model_revision", "0" * 40),
+        ("split", "test"),
+        ("test_evaluated", 0),
+    ],
+)
+def test_phase_one_baseline_provenance_matches_the_training_protocol(
+    tmp_path, field, replacement
+) -> None:
+    report = make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "base-validation.json"
+    baseline = read_json(path)
+    baseline[field] = replacement
+    write_json(baseline, path)
+
+    with pytest.raises(EvidenceError, match=rf"phase-one baseline {field}"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_phase_one_baseline_must_be_within_the_frozen_tolerance(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    path = tmp_path / "outputs" / "base-validation.json"
+    baseline = read_json(path)
+    baseline["metrics_before_temperature"]["macro_f1"] = 0.0
+    write_json(baseline, path)
+
+    with pytest.raises(EvidenceError, match="disagrees with"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
 def test_validation_label_count_is_bound_to_the_config(tmp_path) -> None:
     report = make_training_run(tmp_path)
     report["validation_label_sha256"] = sha256_labels(LABELS[:-4])
@@ -304,6 +605,64 @@ def test_logit_reference_shape_is_verified(tmp_path) -> None:
     reference["shape"] = [1, 4]
 
     with pytest.raises(EvidenceError, match="shape .* does not match the recorded"):
+        load_logits(reference, root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (np.zeros((0, 4), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 1), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 4), dtype=np.float64), "must use float32"),
+        (np.zeros((3, 4), dtype=np.bool_), "must use float32"),
+        (np.full((3, 4), np.nan, dtype=np.float32), "only finite"),
+    ],
+)
+def test_saving_logits_rejects_noncanonical_payloads(
+    tmp_path, values, message
+) -> None:
+    with pytest.raises(EvidenceError, match=message):
+        save_logits(values, tmp_path, "outputs/logits/probe.npy")
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        (np.zeros((0, 4), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 1), dtype=np.float32), r"shape \[rows, 4\]"),
+        (np.zeros((3, 4), dtype=np.float64), "must use float32"),
+        (np.zeros((3, 4), dtype=np.bool_), "must use float32"),
+        (np.full((3, 4), np.inf, dtype=np.float32), "only finite"),
+    ],
+)
+def test_loading_logits_rejects_self_consistent_noncanonical_payloads(
+    tmp_path, values, message
+) -> None:
+    path = tmp_path / "outputs" / "logits" / "probe.npy"
+    path.parent.mkdir(parents=True)
+    np.save(path, values)
+    reference = {
+        "path": "outputs/logits/probe.npy",
+        "shape": list(values.shape),
+        "sha256": sha256_array(values),
+    }
+
+    with pytest.raises(EvidenceError, match=message):
+        load_logits(reference, root=tmp_path)
+
+
+@pytest.mark.parametrize("recorded_shape", [[True, 4], [3.0, 4], [3, True]])
+def test_logit_reference_shape_requires_exact_integer_metadata(
+    tmp_path, recorded_shape
+) -> None:
+    reference = save_logits(
+        np.zeros((3, 4), dtype=np.float32),
+        tmp_path,
+        "outputs/logits/probe.npy",
+    )
+    reference["shape"] = recorded_shape
+
+    with pytest.raises(EvidenceError, match="positive integer"):
         load_logits(reference, root=tmp_path)
 
 
@@ -572,6 +931,49 @@ def test_final_test_checks_adapter_protocol_before_loading_the_base_model(
         )
 
 
+def test_final_test_revalidates_frozen_calibration_before_model_or_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["validation"]["base"]["temperature"] = 999.0
+    write_json(frozen, path)
+
+    validation = Split(
+        "validation",
+        tuple(
+            Example(
+                row_id=f"validation-{index}",
+                text=f"article {index}",
+                label=label,
+                source_index=index,
+            )
+            for index, label in enumerate(LABELS)
+        ),
+    )
+
+    class TrainOnlyBundle:
+        def __init__(self):
+            self.validation = validation
+
+    def load_train_only(*, allow_test, config):
+        assert allow_test is False
+        return TrainOnlyBundle()
+
+    monkeypatch.setattr("loraforge.data.load_dataset", load_train_only)
+    monkeypatch.setattr(
+        "loraforge.modeling.load_quantized_base",
+        lambda config: pytest.fail("tampered gate reached GPU model loading"),
+    )
+
+    with pytest.raises(EvidenceError, match=r"frozen\.base\.temperature"):
+        run_final_test(
+            synthetic_config(), confirmation=CONFIRMATION, root=tmp_path
+        )
+
+
 def test_second_final_test_run_is_refused(tmp_path) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
@@ -612,6 +1014,9 @@ def test_final_test_claims_attempt_before_loading_publisher_test(
     )
     monkeypatch.setattr(
         "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: object()
+    )
+    monkeypatch.setattr(
+        "loraforge.final_test.verify_frozen_selection", lambda **kwargs: {}
     )
 
     def fail_after_claim(**kwargs):
@@ -661,6 +1066,9 @@ def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) ->
     )
     monkeypatch.setattr(
         "loraforge.modeling.attach_saved_adapter", lambda model, adapter_dir: FakeModel()
+    )
+    monkeypatch.setattr(
+        "loraforge.final_test.verify_frozen_selection", lambda **kwargs: {}
     )
     monkeypatch.setattr("loraforge.data.load_dataset", lambda **kwargs: FakeBundle())
     monkeypatch.setattr(

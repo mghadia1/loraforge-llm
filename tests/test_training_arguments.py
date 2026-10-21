@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from loraforge.config import default_config
-from loraforge.provenance import EvidenceError
-from loraforge.training import training_argument_kwargs
+from loraforge.provenance import EvidenceError, read_json, sha256_file
+from loraforge.training import (
+    capture_pretraining_manifest,
+    refuse_existing_training_outputs,
+    training_argument_kwargs,
+)
 
 
 MODERN = {
@@ -37,9 +43,27 @@ def test_warmup_ratio_becomes_warmup_steps_when_the_ratio_is_unavailable() -> No
     assert kwargs["warmup_steps"] == 30  # 3% of 1,000 optimizer steps
 
 
-def test_warmup_steps_never_rounds_down_to_zero_on_a_short_run() -> None:
+def test_warmup_step_fallback_uses_the_same_ceiling_as_transformers() -> None:
     supported = (MODERN - {"warmup_ratio"}) | {"warmup_steps"}
-    assert build(supported, steps=5)["warmup_steps"] == 1
+    assert build(supported, steps=101)["warmup_steps"] == 4
+
+
+def test_zero_warmup_ratio_does_not_gain_a_fabricated_warmup_step() -> None:
+    supported = (MODERN - {"warmup_ratio"}) | {"warmup_steps"}
+    config = default_config()
+    config = replace(
+        config,
+        training=replace(config.training, warmup_ratio=0.0),
+    )
+
+    kwargs = training_argument_kwargs(
+        config,
+        supported,
+        output_dir="/tmp/out",
+        total_optimizer_steps=101,
+    )
+
+    assert kwargs["warmup_steps"] == 0
 
 
 def test_losing_warmup_entirely_is_refused() -> None:
@@ -64,3 +88,86 @@ def test_cosmetic_arguments_are_dropped_quietly() -> None:
 def test_no_unsupported_argument_ever_reaches_TrainingArguments() -> None:
     supported = MODERN - {"remove_unused_columns", "save_strategy"}
     assert set(build(supported)).issubset(supported)
+
+
+def test_pretraining_manifest_is_written_once_and_hash_bound(
+    tmp_path, monkeypatch
+) -> None:
+    recorded_environment = {
+        "python": "3.12.0",
+        "platform": "test-host",
+        "packages": {"transformers": "test-version"},
+        "gpu_name": "Tesla T4",
+        "cuda_available": True,
+        "cuda_version": "12.8",
+    }
+    monkeypatch.setattr("loraforge.training.environment", lambda: recorded_environment)
+    monkeypatch.setattr("loraforge.training.utc_now", lambda: "2026-09-25T16:00:00Z")
+    arguments = build(MODERN)
+    parameters = {"trainable_parameters": 41_943_040}
+
+    manifest, reference = capture_pretraining_manifest(
+        default_config(), arguments, parameters, root=tmp_path
+    )
+    path = tmp_path / reference["path"]
+
+    assert manifest == read_json(path)
+    assert manifest["stage"] == "before_optimizer_training"
+    assert manifest["test_loaded"] is False
+    assert manifest["environment"] == recorded_environment
+    assert reference["sha256"] == sha256_file(path)
+    with pytest.raises(EvidenceError, match="already exists"):
+        capture_pretraining_manifest(
+            default_config(), arguments, parameters, root=tmp_path
+        )
+
+
+def test_phase_one_inputs_are_allowed_in_a_fresh_training_root(tmp_path) -> None:
+    outputs = tmp_path / "outputs"
+    outputs.mkdir()
+    (outputs / "base-validation.json").write_text("{}", encoding="utf-8")
+    (outputs / "qlora-setup.json").write_text("{}", encoding="utf-8")
+
+    refuse_existing_training_outputs(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "directory"),
+    [
+        ("outputs/training-report.json", False),
+        ("outputs/pretraining-manifest.json", False),
+        ("outputs/trainer", True),
+        ("outputs/logits/base-validation.npy", False),
+        ("outputs/logits/tuned-validation-epoch-7.npy", False),
+        ("adapters/epoch-interrupted", True),
+        ("adapters/selected", True),
+        ("outputs/frozen-selection.json", False),
+        ("outputs/final-test-attempt.json", False),
+        ("outputs/final-test-report.json", False),
+    ],
+)
+def test_training_refuses_any_prior_phase_two_artifact(
+    tmp_path, relative_path, directory
+) -> None:
+    artifact = tmp_path / relative_path
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    if directory:
+        artifact.mkdir()
+    else:
+        artifact.write_text("prior attempt", encoding="utf-8")
+
+    with pytest.raises(EvidenceError, match="use a fresh run root"):
+        refuse_existing_training_outputs(tmp_path)
+
+    assert artifact.exists()
+
+
+def test_training_refuses_a_broken_symlink_artifact(tmp_path) -> None:
+    selected = tmp_path / "adapters" / "selected"
+    selected.parent.mkdir(parents=True)
+    selected.symlink_to(tmp_path / "missing-prior-adapter", target_is_directory=True)
+
+    with pytest.raises(EvidenceError, match="adapters/selected"):
+        refuse_existing_training_outputs(tmp_path)
+
+    assert selected.is_symlink()

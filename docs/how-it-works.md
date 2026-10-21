@@ -15,7 +15,10 @@ and fails if appending a code is not exactly one token. It also proves that
 direct chat-template tokenization exactly matches encoding the rendered prompt
 used to derive those contextual IDs; a tokenizer-library drift cannot silently
 make scoring use a different token context. The prompt itself is tokenized
-directly, avoiding a duplicated beginning-of-sequence token.
+directly, avoiding a duplicated beginning-of-sequence token. Every prompt,
+class-code, and EOS token ID must be an exact nonnegative integer; boolean,
+fractional, and negative aliases are rejected instead of being silently
+coerced to different vocabulary indices.
 Prompt construction rejects booleans and other non-integer label aliases, and
 the scorer validates nonempty input plus positive integer batch/length controls
 before importing Torch or touching a model.
@@ -36,9 +39,10 @@ model-visible content, preventing repeated articles from silently receiving
 extra training weight or being counted more than once in evaluation.
 
 The default loader asks Hugging Face for `split="train"` only; it does not even
-request the publisher test split. A caller must explicitly set `allow_test=True`,
-which makes a separate `split="test"` request after checkpoint and temperature
-selection are frozen.
+request the publisher test split. A caller must explicitly set the exact boolean
+`allow_test=True`; truthy integer, string, and object aliases fail before any
+dataset access. The authorized path makes a separate `split="test"` request
+after checkpoint and temperature selection are frozen.
 
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
@@ -84,6 +88,8 @@ Experiment JSON is parsed as an exact typed schema before any model or dataset
 work starts. Missing and unexpected fields are rejected instead of inheriting
 silent dataclass defaults, JSON booleans cannot stand in for integer counts,
 and every nested object and target-module array keeps its declared shape.
+Experiment configs and evidence artifacts reject duplicate object keys at every
+level rather than silently applying parser-specific last-value-wins semantics.
 
 The completed run's Tesla T4 identity is cross-checked between setup and
 training evidence, and the selected adapter's 167,838,575-byte size is checked
@@ -113,17 +119,41 @@ boundary merely to fail during scoring.
 
 ## Training the two frozen epochs
 
+The fresh T4 notebook starts training through the public `loraforge train`
+command with an explicit `configs/experiment.json` path. That makes the
+canonical, fully typed config the notebook's protocol source and keeps the CLI's
+preflight boundary in front of dataset and model loading. It copies the two
+phase-one prerequisites into a new ignored run root, refuses to reuse that root,
+and freezes and verifies the new run there; tracked evidence from the completed
+experiment therefore cannot block or be overwritten by the notebook.
+
 `build_supervised_features` encodes each training row and asserts that exactly
 two tokens — the answer code and EOS — escape the `-100` mask. `pad_batch`
 right-pads a batch: inputs with the pad ID, attention with `0`, labels with
 `-100`, so padding contributes nothing to the loss either. This is deliberately
 not an off-the-shelf SFT text path, which would compute loss over the prompt.
 
+The configured warmup ratio is passed through when the installed Transformers
+version supports it. On versions that accept only an integer warmup-step count,
+LoRAForge uses the same ceiling conversion as `TrainingArguments`, including
+preserving a zero ratio as zero, so library compatibility cannot change the
+learning-rate schedule.
+
 Before the first optimizer step, the trainer re-scores validation with the
 adapter switched off and refuses to continue unless it reproduces the phase-one
 baseline macro-F1. That single check catches a changed prompt, tokenizer, or
 model revision between the two GPU sessions — the failure that would otherwise
-turn into a fake improvement.
+turn into a fake improvement. Evidence verification repeats that compatibility
+check against `outputs/base-validation.json`, validates the artifact's model,
+revision, split, locked-test state, and row count, and rejects a missing or
+edited `baseline_agreement` block in the training report.
+
+The training command also requires a fresh phase-two output area before it
+loads publisher data or the quantized model. Existing Trainer state, validation
+logits, epoch checkpoints, selected adapters, or downstream freeze/final-test
+artifacts make it fail closed. A failed GPU attempt must therefore be preserved
+and a retry must use a new run root; training never deletes or silently reuses
+partial evidence from an earlier attempt.
 
 After each epoch the adapter is saved, hashed, and scored on validation. The
 selection rule is one line: highest validation macro-F1, and an exact tie goes
@@ -131,13 +161,32 @@ to the earlier epoch. Both checkpoints, their validation logits, the loss curve,
 wall time, peak CUDA memory, package versions, and adapter hashes land in
 `outputs/training-report.json`.
 
+Future training reports use schema version 2. Immediately before optimizer
+training, the trainer writes `outputs/pretraining-manifest.json` with the typed
+config, resolved training arguments, audited parameter block, and environment,
+then retains that file's SHA-256 in memory for the final report. The manifest is
+never overwritten, and verification requires its hash and all copied controls
+to match. A mid-run or post-run edit therefore cannot turn a different GPU,
+package stack, config, or parameter audit into an apparently controlled run.
+Verification also applies an exact typed schema to the environment, resolved
+training arguments, and parameter audit: package keys must be complete, CUDA
+fields must be internally consistent, protocol arguments must match the typed
+config, and parameter totals must reproduce the recorded percentage. Rehashing
+matching but malformed control blocks therefore cannot make them valid evidence.
+The completed historical schema-v1 report remains verifiable but is explicitly
+legacy evidence without this second-artifact binding.
+
 ## Why the evidence is hashed
 
 Every reported number is recomputable from raw logits stored next to it, and
 `loraforge verify` recomputes them. Metrics are re-derived from the `.npy`
-logits down to per-class precision/recall/F1 and every calibration bin, logits
-are confined to repo-relative paths under the evidence root and checked against
-both their recorded array shape and SHA-256. Adapter directory references are
+logits down to per-class precision/recall/F1 and every calibration bin. Their
+JSON scalars retain the expected types, so booleans cannot masquerade as
+zero/one counts or numeric values. Logits are confined to repo-relative paths
+under the evidence root and checked against an exact nonempty float32
+`[rows, 4]` payload contract, finite values, their strictly typed recorded
+shape, and SHA-256. The loader never coerces another dtype into the evidence
+contract. Adapter directory references are
 also required to be repo-relative, and their canonical paths — including any
 directory symlinks — must remain under the evidence root before reports-only
 verification, strict hashing, or model loading. The selected epoch is re-derived
@@ -150,7 +199,10 @@ be real entries rather than symlinks, so no executable weight can escape the
 evidence root while still passing a same-content hash check. Strict verification
 also parses every saved PEFT adapter config and binds its base-model identity,
 LoRA rank/alpha/dropout/bias, target modules, task type, and disabled override
-features to the typed experiment protocol. This catches an internally
+features to the typed experiment protocol. Alternative execution modes such as
+aLoRA invocation gating, Arrow routing, BD-LoRA, transposed weight layout, and
+automatic weight tying must remain disabled, as must initialization modes that
+would alter ordinary LoRA's base/adapter decomposition. This catches an internally
 hash-consistent adapter that was created with different semantics. The same
 check runs before the final inference adapter is attached. For a distributed
 selected adapter, every recorded
@@ -164,6 +216,18 @@ An explicit `verify --training-only` scope ignores existing final-test and
 interval artifacts, loads publisher train only, and verifies the validation
 metrics, checkpoint selection, and adapter manifests without requesting the
 publisher test split.
+`compare-runs --strict` applies that same reports-only training verification to
+each run against its own evidence root before it emits a comparison. It also
+reconstructs both validation selections from the pinned publisher-train split
+and requires their ordered row-ID digests to match; equal label sequences alone
+cannot make different validation articles look equivalent. The command calls
+matching config, GPU, and package fields `recorded_controls_match`; it does not
+emit a `controlled` claim. Configs are schema-validated, but historical GPU and
+package values — and the configs themselves — are self-reported by the same
+mutable training reports and lack a second evidence source. The comparison
+likewise omits parameter counts, adapter bytes, wall time, and peak memory
+because those resource values are not
+independently bound for both sides of the historical rank comparison.
 The verifier also re-fits both temperatures from the hash-checked validation
 logits, checks the frozen calibration metrics, and proves that the final report
 used those validation-fitted values. It also requires the final report's model
@@ -212,6 +276,10 @@ pins the selected adapter, its hashes, the validation metrics, and the two
 validation-fitted temperatures. The final command refuses to run unless that
 file exists, refuses if the adapter's hash has changed since, refuses without an
 explicit confirmation string, and refuses to overwrite an existing final report.
+Before GPU setup or publisher-test access, it validates the gate's exact schema
+and lifecycle timestamps, reloads publisher train only, and re-derives checkpoint
+selection, validation metrics, and both fitted temperatures. An edited or
+malformed gate therefore cannot consume the one allowed test attempt.
 It also revalidates the experiment config at the entry point: the test budget
 must be the JSON integer `1` (not boolean `true`), and `resume_eligible` must
 remain `false` until the separate explanation gate passes. Before model or

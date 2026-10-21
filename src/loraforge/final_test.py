@@ -127,6 +127,10 @@ def run_final_test(
 
     adapter_dir = resolve_adapter_directory(root, frozen["selected_adapter_dir"])
     verify_saved_adapter_config(adapter_dir, config)
+    # Re-derive the complete validation-only gate before GPU setup or publisher-test
+    # access. A self-consistent adapter snapshot is not enough if the frozen
+    # temperature or calibration evidence was edited after selection.
+    verify_frozen_selection(root=root)
     base_model, tokenizer = load_quantized_base(config)
     model = attach_saved_adapter(base_model, adapter_dir)
     attempt_path, attempt = _claim_final_test_attempt(root, frozen["selected_epoch"])

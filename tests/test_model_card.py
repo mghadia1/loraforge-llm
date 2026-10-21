@@ -237,6 +237,7 @@ def test_unverified_resource_claims_are_not_published(tmp_path) -> None:
         "docs/STATUS.md",
         "docs/how-it-works.md",
         "docs/LEARNING_GUIDE.md",
+        "docs/ABLATION_RANK4.md",
     ],
 )
 def test_primary_public_docs_omit_uncorroborated_training_resources(
@@ -250,8 +251,24 @@ def test_primary_public_docs_omit_uncorroborated_training_resources(
         "12.34 GiB",
         "41,943,040",
         "roughly 0.6%",
+        "10,485,760",
+        "42,008,469",
+        "14,487.9",
+        "5.48 GiB",
     ):
         assert unsupported_claim not in text
+
+
+def test_tracked_rank4_card_matches_the_current_evidence_policy() -> None:
+    root = Path(__file__).parents[1] / "runs" / "rank4"
+    tracked = (root / "outputs" / "model-card.md").read_text(encoding="utf-8")
+
+    generated = build_model_card(
+        root=root,
+        repo_url="https://github.com/mghadia1/loraforge-llm",
+    )
+
+    assert tracked == generated
 
 
 def test_missing_independent_evidence_omits_resource_claims(tmp_path) -> None:

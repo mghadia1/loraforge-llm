@@ -246,6 +246,8 @@ def assert_unique(split: Split) -> None:
 
 
 def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) -> DatasetBundle:
+    if type(allow_test) is not bool:
+        raise TypeError("allow_test must be a boolean")
     config = config or DataConfig()
     from datasets import load_dataset as hf_load_dataset
 

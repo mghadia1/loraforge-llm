@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import time
 from pathlib import Path
@@ -11,14 +12,16 @@ import numpy as np
 
 from .collate import SupervisedCollator, build_supervised_features
 from .config import ExperimentConfig
-from .data import DatasetBundle
+from .data import CLASS_NAMES, DatasetBundle
 from .metrics import evaluation_block
 from .provenance import (
     EvidenceError,
+    PRETRAINING_MANIFEST_PATH,
     environment,
     read_json,
     save_logits,
     sha256_directory,
+    sha256_file,
     sha256_labels,
     utc_now,
     write_json,
@@ -31,6 +34,78 @@ from .selection import SELECTION_RULE
 # across GPU sessions, tight enough that a changed prompt, tokenizer, or model
 # revision cannot hide inside it.
 BASELINE_AGREEMENT_TOLERANCE = 0.005
+TRAINING_REPORT_SCHEMA_VERSION = 2
+
+
+def capture_pretraining_manifest(
+    config: ExperimentConfig,
+    training_arguments: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    root: Path = Path("."),
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Write the immutable controls captured before optimizer training starts."""
+    root = Path(root)
+    target = root / PRETRAINING_MANIFEST_PATH
+    if target.exists():
+        raise EvidenceError(
+            f"{target} already exists; move it aside before retraining so a prior "
+            "attempt's pre-training controls are never silently overwritten"
+        )
+    manifest = {
+        "schema_version": 1,
+        "created_at_utc": utc_now(),
+        "stage": "before_optimizer_training",
+        "test_loaded": False,
+        "config": config.to_dict(),
+        "environment": environment(),
+        "training_arguments": training_arguments,
+        "parameters": parameters,
+    }
+    write_json(manifest, target)
+    # JSON normalizes tuples such as target_modules to arrays. Keep the in-memory
+    # values byte-semantically aligned with the artifact that will be verified.
+    manifest = read_json(target)
+    reference = {
+        "path": PRETRAINING_MANIFEST_PATH,
+        "sha256": sha256_file(target),
+    }
+    return manifest, reference
+
+
+def refuse_existing_training_outputs(root: Path) -> None:
+    """Require a fresh phase-two output area before any costly training setup.
+
+    A failed GPU run can leave checkpoints, logits, or Trainer state without ever
+    reaching ``training-report.json``. Reusing those paths would overwrite the
+    evidence from that attempt and make a later report ambiguous, so callers must
+    choose a new run root instead.
+    """
+    root = Path(root)
+    known_paths = {
+        root / "outputs" / "training-report.json",
+        root / PRETRAINING_MANIFEST_PATH,
+        root / "outputs" / "trainer",
+        root / "outputs" / "logits" / "base-validation.npy",
+        root / "outputs" / "frozen-selection.json",
+        root / "outputs" / "final-test-attempt.json",
+        root / "outputs" / "final-test-report.json",
+        root / "adapters" / "selected",
+    }
+    known_paths.update((root / "adapters").glob("epoch-*"))
+    known_paths.update(
+        (root / "outputs" / "logits").glob("tuned-validation-epoch-*.npy")
+    )
+    conflicts = sorted(
+        path.relative_to(root).as_posix()
+        for path in known_paths
+        if path.exists() or path.is_symlink()
+    )
+    if conflicts:
+        raise EvidenceError(
+            "training outputs already exist and must not be overwritten: "
+            f"{conflicts}; use a fresh run root and preserve the prior attempt"
+        )
 
 
 def select_checkpoint(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -114,11 +189,53 @@ def _base_validation_logits(model, tokenizer, bundle: DatasetBundle, config: Exp
         )
 
 
-def check_baseline_agreement(recomputed: dict[str, Any], phase_one_path: Path) -> dict[str, Any]:
-    """The re-scored base must reproduce the T4 phase-one baseline, or something moved."""
+def check_baseline_agreement(
+    recomputed: dict[str, Any],
+    phase_one_path: Path,
+    config: ExperimentConfig,
+) -> dict[str, Any]:
+    """Bind the re-scored base to the compatible phase-one validation artifact."""
     recorded = read_json(phase_one_path)
-    expected = recorded["metrics_before_temperature"]["macro_f1"]
-    actual = recomputed["macro_f1"]
+    if not isinstance(recorded, dict):
+        raise EvidenceError("phase-one baseline must be a JSON object")
+    expected_provenance = {
+        "schema_version": 1,
+        "model": config.model_name,
+        "model_revision": config.model_revision,
+        "split": "validation",
+        "test_evaluated": False,
+    }
+    for field, expected_value in expected_provenance.items():
+        actual_value = recorded.get(field)
+        if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+            raise EvidenceError(
+                f"phase-one baseline {field} does not match the training protocol"
+            )
+
+    metrics = recorded.get("metrics_before_temperature")
+    if not isinstance(metrics, dict):
+        raise EvidenceError("phase-one baseline metrics must be an object")
+    expected_rows = len(CLASS_NAMES) * config.data.validation_per_class
+    if type(metrics.get("rows")) is not int or metrics["rows"] != expected_rows:
+        raise EvidenceError(
+            "phase-one baseline row count does not match the validation protocol"
+        )
+    expected = metrics.get("macro_f1")
+    actual = recomputed.get("macro_f1")
+    if (
+        isinstance(expected, bool)
+        or not isinstance(expected, (int, float))
+        or not np.isfinite(expected)
+        or not 0.0 <= expected <= 1.0
+    ):
+        raise EvidenceError("phase-one baseline macro-F1 must be a finite value in [0, 1]")
+    if (
+        isinstance(actual, bool)
+        or not isinstance(actual, (int, float))
+        or not np.isfinite(actual)
+        or not 0.0 <= actual <= 1.0
+    ):
+        raise EvidenceError("re-scored base macro-F1 must be a finite value in [0, 1]")
     if abs(expected - actual) > BASELINE_AGREEMENT_TOLERANCE:
         raise EvidenceError(
             f"re-scored base macro-F1 {actual} disagrees with {phase_one_path} value {expected}; "
@@ -168,7 +285,9 @@ def training_argument_kwargs(
     if "warmup_ratio" in supported:
         requested["warmup_ratio"] = config.training.warmup_ratio
     elif "warmup_steps" in supported:
-        requested["warmup_steps"] = max(1, round(config.training.warmup_ratio * total_optimizer_steps))
+        requested["warmup_steps"] = math.ceil(
+            config.training.warmup_ratio * total_optimizer_steps
+        )
     else:
         raise EvidenceError(
             "TrainingArguments accepts neither warmup_ratio nor warmup_steps; the frozen "
@@ -195,15 +314,12 @@ def train_qlora(
     root: Path = Path("."),
 ) -> dict[str, Any]:
     """Run the two frozen epochs and write ``outputs/training-report.json``."""
+    refuse_existing_training_outputs(root)
+
     import torch
     from transformers import Trainer, TrainingArguments
 
     root = Path(root)
-    if (root / "outputs" / "training-report.json").exists():
-        raise EvidenceError(
-            "outputs/training-report.json already exists; move it aside before retraining "
-            "so a failed run is never silently overwritten"
-        )
 
     torch.manual_seed(config.data.seed)
     # Audit first: this raises if any non-adapter weight is trainable, which is
@@ -215,12 +331,11 @@ def train_qlora(
     base_logits = _base_validation_logits(model, tokenizer, bundle, config)
     base_metrics = evaluation_block(base_logits, bundle.validation.labels)
     baseline_agreement = check_baseline_agreement(
-        base_metrics, root / "outputs" / "base-validation.json"
+        base_metrics, root / "outputs" / "base-validation.json", config
     )
 
     recorder = _EpochRecorder(model, tokenizer, bundle, config, root)
     import inspect
-    import math
 
     effective_batch = (
         config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
@@ -231,6 +346,12 @@ def train_qlora(
         set(inspect.signature(TrainingArguments.__init__).parameters),
         output_dir=str(root / "outputs" / "trainer"),
         total_optimizer_steps=total_optimizer_steps,
+    )
+    pretraining, pretraining_reference = capture_pretraining_manifest(
+        config,
+        argument_kwargs,
+        parameters,
+        root=root,
     )
     arguments = TrainingArguments(**argument_kwargs)
     trainer = Trainer(
@@ -252,19 +373,18 @@ def train_qlora(
     selected = select_checkpoint(recorder.records)
     selected_relative = "adapters/selected"
     selected_dir = root / selected_relative
-    if selected_dir.exists():
-        shutil.rmtree(selected_dir)
     shutil.copytree(root / selected["adapter_dir"], selected_dir)
 
     report = {
-        "schema_version": 1,
+        "schema_version": TRAINING_REPORT_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "model": config.model_name,
         "model_revision": config.model_revision,
-        "config": config.to_dict(),
-        "environment": environment(),
-        "training_arguments": argument_kwargs,
-        "parameters": parameters,
+        "config": pretraining["config"],
+        "pretraining_manifest": pretraining_reference,
+        "environment": pretraining["environment"],
+        "training_arguments": pretraining["training_arguments"],
+        "parameters": pretraining["parameters"],
         "test_evaluated": False,
         "train_rows": len(bundle.train),
         "validation_rows": len(bundle.validation),

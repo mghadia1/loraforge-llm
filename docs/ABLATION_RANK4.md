@@ -1,7 +1,7 @@
 # Rank-4 ablation — plan
 
-**Question.** The frozen run used rank 16 (41,943,040 trainable parameters). Does
-this adaptation actually need 16 directions, or is rank 16 over-provisioned?
+**Question.** The frozen run used rank 16. Does this adaptation actually need 16
+directions, or is rank 16 over-provisioned?
 
 **Prediction, stated before running.** AG News adaptation is behavioral, not
 knowledge-bound: the base model already reads the articles, and training taught a
@@ -47,17 +47,16 @@ The separate `--root` keeps the frozen artifacts untouchable. Training re-scores
 the untuned base with the adapter disabled and aborts unless it reproduces the
 phase-one baseline, which is why that file must be copied across.
 
-Expected cost: about 3.6 hours on a T4, the same as the frozen run — rank barely
-affects step time, because the frozen base model dominates the compute.
+The run still requires a human-started T4. This protocol does not assume that a
+lower LoRA rank produces a proportional runtime or memory reduction.
 
 ## Reading the result
 
 Compare **validation** macro-F1 against 0.9310. The test split is not available to
 this arm and must not be used.
 
-- **Within about ±0.01** — rank 16 was over-provisioned. The adapter drops from
-  167 MB to roughly 42 MB at equal quality, and the claim becomes "matched the
-  result with a quarter of the parameters."
+- **Within about ±0.01** — rank 16 was over-provisioned. The claim becomes
+  "matched the validation result with one quarter of the LoRA rank."
 - **Clearly lower** — the adaptation needed more than four directions. Report the
   gap; that bounds the intrinsic dimensionality of this task from below.
 - **Clearly higher** — treat with suspicion and check for a confound before
@@ -69,20 +68,23 @@ this arm and must not be used.
 
 # Rank-4 ablation — result
 
-Run August 18, 2026 on a Colab Tesla T4. `loraforge compare-runs --strict` confirms
-the comparison is controlled: identical library stack, same GPU model, the same
-validation-label digest, and the only config differences are the two under test
-plus the removed test budget. The command reapplies the checkpoint-selection rule
-and reports the selected epochs rather than the maximum metric in isolation.
+The reports record an August 18, 2026 Colab Tesla T4 run. `loraforge
+compare-runs --strict` confirms the hash-checked validation evidence, exact
+ordered validation rows, and checkpoint selection. It schema-validates that the
+two reports record the intended config difference, the same GPU, and the same
+installed-library versions. Those control fields are self-reported and are not
+independently corroborated. Strict mode therefore calls them matching recorded
+controls, not proof that the experiment was controlled in every unobserved way.
 
 | | rank 16 | rank 4 |
 |---|---:|---:|
 | validation macro-F1 (epoch 2) | 0.9310 | **0.9360** |
 | validation macro-F1 (epoch 1) | 0.9248 | 0.9182 |
-| trainable parameters | 41,943,040 (0.578%) | **10,485,760 (0.1445%)** |
-| adapter bytes | 167,838,575 | **42,008,469** |
-| peak CUDA | 5.77 GiB | 5.48 GiB |
-| wall time | 13,083.9 s | 14,487.9 s |
+
+Parameter counts, adapter bytes, wall time, and peak memory are intentionally
+omitted. Strict comparison verifies the validation/logit evidence, but these
+resource values exist only in mutable run reports for this pair and are not
+independently bound.
 
 ## The difference is not distinguishable from noise
 
@@ -101,16 +103,18 @@ would be claiming a ten-row difference on a 2,000-row split as a result.
 
 ## What this means
 
-The prediction recorded before the run held: this adaptation is low-dimensional
-enough that four directions carry it. **Rank 16 was over-provisioned by four times** —
-the same task quality for a quarter of the trainable parameters and a quarter of the
-adapter on disk.
+The result is consistent with the prediction recorded before the run: rank 4
+produced statistically indistinguishable validation quality with one quarter of
+the LoRA rank setting. It does not independently establish that rank was the only
+causal difference, because the historical config, GPU, and package metadata have
+no second evidence source.
 
 Two things this ablation does *not* show:
 
-- **Rank 4 is not faster to train.** It took 11% longer on the same GPU model. The
-  frozen 7B base dominates step time, so trainable-parameter count barely moves the
-  clock; that gap is shared-infrastructure variance, not a property of rank.
+- **No sole-cause claim is supported.** The configs pass the exact typed schema,
+  but the matching config and environment fields remain self-reported provenance.
+- **No runtime or memory conclusion is supported.** Those measurements are not
+  independently bound for both runs, so the comparison omits them.
 - **This does not generalize to other tasks.** AG News adaptation is behavioural —
   a labelling convention and an output format on top of comprehension the base model
   already had. A task requiring knowledge the base model lacks should need more

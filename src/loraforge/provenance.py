@@ -25,9 +25,29 @@ AUDITED_PACKAGES = (
     "trl",
 )
 
+PRETRAINING_MANIFEST_PATH = "outputs/pretraining-manifest.json"
+
 
 class EvidenceError(RuntimeError):
     """Raised when a stored artifact disagrees with what its own data recomputes."""
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while refusing ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate JSON object key {name!r}")
+        result[name] = value
+    return result
+
+
+def unique_json_loads(text: str) -> Any:
+    """Parse JSON while requiring unique keys at every object level."""
+    return json.loads(
+        text,
+        object_pairs_hook=_unique_json_object,
+    )
 
 
 def utc_now() -> str:
@@ -127,6 +147,23 @@ def sha256_array(array: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def _validated_logit_array(array: Any, *, source: str) -> np.ndarray:
+    """Require the exact on-disk class-logit contract before hashing or use."""
+    values = np.asarray(array)
+    if values.dtype != np.dtype(np.float32):
+        raise EvidenceError(
+            f"{source} logits must use float32 without verifier-side coercion; "
+            f"got {values.dtype}"
+        )
+    if values.ndim != 2 or values.shape[0] < 1 or values.shape[1] != 4:
+        raise EvidenceError(
+            f"{source} logits must have nonempty shape [rows, 4]; got {values.shape}"
+        )
+    if not np.isfinite(values).all():
+        raise EvidenceError(f"{source} logits must contain only finite values")
+    return np.ascontiguousarray(values)
+
+
 def sha256_labels(labels: list[int]) -> str:
     """Digest a label or prediction sequence, refusing an empty one.
 
@@ -215,11 +252,41 @@ def resolve_adapter_directory(root: Path, relative_path: str) -> Path:
     return target
 
 
+def resolve_evidence_file(
+    root: Path,
+    relative_path: str,
+    *,
+    label: str,
+    suffix: str | None = None,
+) -> Path:
+    """Resolve one repo-relative evidence file without allowing path escape."""
+    if not isinstance(relative_path, str) or not relative_path:
+        raise EvidenceError(f"{label} path must be a nonempty repo-relative string")
+    candidate = Path(relative_path)
+    if not candidate.parts or candidate.is_absolute() or ".." in candidate.parts:
+        raise EvidenceError(
+            f"{label} path must stay repo-relative under its evidence root: "
+            f"{relative_path!r}"
+        )
+    if suffix is not None and candidate.suffix != suffix:
+        raise EvidenceError(f"{label} path must end in {suffix}: {relative_path!r}")
+
+    resolved_root = Path(root).resolve()
+    target = (resolved_root / candidate).resolve()
+    try:
+        target.relative_to(resolved_root)
+    except ValueError as error:
+        raise EvidenceError(
+            f"{label} path escapes its evidence root: {relative_path!r}"
+        ) from error
+    return target
+
+
 def save_logits(array: np.ndarray, root: Path, relative_path: str) -> dict[str, Any]:
     """Write logits under ``root`` but record the repo-relative path, so evidence relocates."""
     target = _resolve_logit_path(root, relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    values = np.ascontiguousarray(np.asarray(array, dtype=np.float32))
+    values = _validated_logit_array(array, source="generated")
     np.save(target, values)
     return {
         "path": relative_path,
@@ -235,11 +302,23 @@ def load_logits(reference: dict[str, Any], *, root: Path = Path(".")) -> np.ndar
     path = _resolve_logit_path(root, reference.get("path"))
     if not path.exists():
         raise EvidenceError(f"missing logits file {path}")
-    values = np.load(path, allow_pickle=False).astype(np.float32)
-    actual_shape = list(values.shape)
-    if reference.get("shape") != actual_shape:
+    values = _validated_logit_array(
+        np.load(path, allow_pickle=False), source=f"stored {path}"
+    )
+    recorded_shape = reference.get("shape")
+    if (
+        type(recorded_shape) is not list
+        or len(recorded_shape) != 2
+        or any(type(size) is not int or size < 1 for size in recorded_shape)
+        or recorded_shape[1] != 4
+    ):
         raise EvidenceError(
-            f"{path} shape {actual_shape} does not match the recorded {reference.get('shape')!r}"
+            f"{path} recorded shape must be positive integer [rows, 4] metadata"
+        )
+    actual_shape = list(values.shape)
+    if recorded_shape != actual_shape:
+        raise EvidenceError(
+            f"{path} shape {actual_shape} does not match the recorded {recorded_shape!r}"
         )
     actual = sha256_array(values)
     if actual != reference.get("sha256"):
@@ -257,4 +336,9 @@ def write_json(payload: dict[str, Any], path: Path) -> None:
 def read_json(path: Path) -> dict[str, Any]:
     if not Path(path).exists():
         raise EvidenceError(f"required artifact {path} does not exist")
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        return unique_json_loads(Path(path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as error:
+        raise EvidenceError(
+            f"required artifact {path} is not unambiguous JSON: {error}"
+        ) from error
