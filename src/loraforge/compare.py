@@ -72,9 +72,33 @@ def compare_runs(
     expected_config_changes: set[str] | None = None,
     validation_row_ids_sha256: tuple[str, str] | None = None,
     evidence_verified: bool = False,
+    pretraining_manifests_verified: tuple[bool, bool] | None = None,
 ) -> dict[str, Any]:
     """Diff two reports without overstating self-reported controls as verified."""
     expected = expected_config_changes or set()
+
+    manifest_status = (
+        (False, False)
+        if pretraining_manifests_verified is None
+        else pretraining_manifests_verified
+    )
+    if (
+        type(manifest_status) is not tuple
+        or len(manifest_status) != 2
+        or any(type(value) is not bool for value in manifest_status)
+    ):
+        raise ValueError(
+            "pretraining_manifests_verified must be a pair of exact booleans"
+        )
+    reports = (baseline, variant)
+    manifest_status = tuple(
+        evidence_verified
+        and verified
+        and type(report.get("schema_version")) is int
+        and report["schema_version"] == 2
+        for verified, report in zip(manifest_status, reports)
+    )
+    controls_independently_verified = all(manifest_status)
 
     package_drift = differences(
         baseline["environment"]["packages"], variant["environment"]["packages"]
@@ -124,8 +148,16 @@ def compare_runs(
         "recorded_controls_match": recorded_controls_match,
         "evidence_verified": evidence_verified,
         "control_evidence": {
-            "source": "self_reported_training_reports",
-            "independently_verified": False,
+            "source": (
+                "hash_bound_pretraining_manifests"
+                if controls_independently_verified
+                else "self_reported_training_reports"
+            ),
+            "independently_verified": controls_independently_verified,
+            "pretraining_manifests_verified": {
+                "baseline": manifest_status[0],
+                "variant": manifest_status[1],
+            },
             "fields": ["config", "gpu", "packages"],
         },
         "package_differences": package_drift,
@@ -207,11 +239,13 @@ def compare_report_files(
     baseline = read_json(baseline_path)
     variant = read_json(variant_path)
     row_hashes = None
+    manifest_status = None
     if verify_evidence:
         from .data import load_dataset
         from .selection import training_report_config, verify_training_report
 
         verified_rows = []
+        verified_manifests = []
         for name, path, report in (
             ("baseline", baseline_path, baseline),
             ("variant", variant_path, variant),
@@ -231,7 +265,12 @@ def compare_report_files(
                 verify_adapters=False,
             )
             verified_rows.append(bundle.validation.id_sha256())
+            verified_manifests.append(
+                type(report.get("schema_version")) is int
+                and report["schema_version"] == 2
+            )
         row_hashes = (verified_rows[0], verified_rows[1])
+        manifest_status = (verified_manifests[0], verified_manifests[1])
 
     return compare_runs(
         baseline,
@@ -239,4 +278,5 @@ def compare_report_files(
         expected_config_changes=expected_config_changes,
         validation_row_ids_sha256=row_hashes,
         evidence_verified=verify_evidence,
+        pretraining_manifests_verified=manifest_status,
     )

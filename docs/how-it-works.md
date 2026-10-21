@@ -220,11 +220,16 @@ publisher test split.
 each run against its own evidence root before it emits a comparison. It also
 reconstructs both validation selections from the pinned publisher-train split
 and requires their ordered row-ID digests to match; equal label sequences alone
-cannot make different validation articles look equivalent. The command calls
-matching config, GPU, and package fields `recorded_controls_match`; it does not
-emit a `controlled` claim. Configs are schema-validated, but historical GPU and
-package values — and the configs themselves — are self-reported by the same
-mutable training reports and lack a second evidence source. The comparison
+cannot make different validation articles look equivalent. When both reports
+use schema v2, strict comparison verifies both hash-bound pre-training manifests
+before marking their matching config, GPU, and package controls as independently
+verified. A mixed or historical schema-v1 pair remains explicitly sourced to
+self-reported training reports; merely declaring schema v2 without strict
+evidence verification cannot upgrade that classification. The command still
+calls the comparison result `recorded_controls_match` and does not emit a
+`controlled` claim, because the manifests bind the recorded controls rather than
+proving every unobserved causal condition. The historical rank-16/rank-4 pair is
+schema v1 and therefore keeps its self-reported limitation. The comparison
 likewise omits parameter counts, adapter bytes, wall time, and peak memory
 because those resource values are not
 independently bound for both sides of the historical rank comparison.
