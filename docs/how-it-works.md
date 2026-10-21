@@ -137,7 +137,9 @@ The configured warmup ratio is passed through when the installed Transformers
 version supports it. On versions that accept only an integer warmup-step count,
 LoRAForge uses the same ceiling conversion as `TrainingArguments`, including
 preserving a zero ratio as zero, so library compatibility cannot change the
-learning-rate schedule.
+learning-rate schedule. Pre-training-manifest verification recomputes the expected
+step count by calling those same functions, so it cannot drift from what
+training wrote.
 
 Before the first optimizer step, the trainer re-scores validation with the
 adapter switched off and refuses to continue unless it reproduces the phase-one

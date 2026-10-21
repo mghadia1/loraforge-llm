@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -38,6 +39,7 @@ from loraforge.selection import (
     verify_frozen_selection,
     verify_training_report,
 )
+from loraforge.training import optimizer_step_count, training_argument_kwargs
 
 
 LABELS = [index % 4 for index in range(40)]
@@ -415,17 +417,81 @@ def test_manifest_bound_training_report_verifies(tmp_path) -> None:
     assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
 
 
-def test_manifest_bound_training_report_accepts_resolved_warmup_steps(tmp_path) -> None:
+def rewrite_manifest_warmup(
+    root: Path, report: dict, warmup_ratio: float, warmup_steps: int
+) -> None:
+    """Record a run whose TrainingArguments accepted only integer warmup_steps."""
+    path = root / "outputs" / "pretraining-manifest.json"
+    manifest = read_json(path)
+    manifest["config"]["training"]["warmup_ratio"] = warmup_ratio
+    del manifest["training_arguments"]["warmup_ratio"]
+    manifest["training_arguments"]["warmup_steps"] = warmup_steps
+    write_json(manifest, path)
+    report["config"] = manifest["config"]
+    report["training_arguments"] = manifest["training_arguments"]
+    report["pretraining_manifest"]["sha256"] = sha256_file(path)
+
+
+# The fixture trains for 6 optimizer steps. At ratios 0.0, 0.4 and 0.75,
+# ceil(ratio * 6) differs from max(1, round(ratio * 6)); the verifier once used
+# the second form while training wrote the first, refusing valid runs.
+@pytest.mark.parametrize("warmup_ratio", [0.03, 0.0, 0.4, 0.75])
+def test_manifest_accepts_the_warmup_steps_training_writes(tmp_path, warmup_ratio) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    base = synthetic_config()
+    config = replace(base, training=replace(base.training, warmup_ratio=warmup_ratio))
+    supported = (set(report["training_arguments"]) - {"warmup_ratio"}) | {"warmup_steps"}
+    written = training_argument_kwargs(
+        config,
+        supported,
+        output_dir=report["training_arguments"]["output_dir"],
+        total_optimizer_steps=optimizer_step_count(config, report["train_rows"]),
+    )["warmup_steps"]
+    rewrite_manifest_warmup(tmp_path, report, warmup_ratio, written)
+
+    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+
+def test_manifest_rejects_warmup_steps_training_would_not_write(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    # 0.4 of 6 optimizer steps: training writes ceil(2.4) = 3, never 2.
+    rewrite_manifest_warmup(tmp_path, report, 0.4, 2)
+
+    with pytest.raises(EvidenceError, match="warmup_steps does not match config"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    "value", ["not-a-dateZ", "2026-13-01T00:00:00Z", "2026-09-25T16:00:00", 20260925]
+)
+def test_pretraining_manifest_timestamp_must_be_a_real_utc_time(tmp_path, value) -> None:
     report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
     path = tmp_path / "outputs" / "pretraining-manifest.json"
     manifest = read_json(path)
-    del manifest["training_arguments"]["warmup_ratio"]
-    manifest["training_arguments"]["warmup_steps"] = 1
-    report["training_arguments"] = manifest["training_arguments"]
+    manifest["created_at_utc"] = value
     write_json(manifest, path)
     report["pretraining_manifest"]["sha256"] = sha256_file(path)
 
-    assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+    with pytest.raises(EvidenceError, match="pre-training manifest created_at_utc must be"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "label"),
+    [("adapters/epoch-1", "epoch-1"), ("adapters/selected", "selected")],
+)
+def test_a_missing_adapter_directory_is_reported_as_missing(
+    tmp_path, relative_path, label
+) -> None:
+    report = make_training_run(tmp_path)
+    shutil.rmtree(tmp_path / relative_path)
+
+    with pytest.raises(EvidenceError, match=rf"^{label} adapter directory .* is missing"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+    # Reports-only verification never needed the files.
+    assert verify_training_report(
+        report, root=tmp_path, labels=LABELS, verify_adapters=False
+    )["epoch"] == 2
 
 
 def test_schema_v2_training_report_requires_the_pretraining_manifest(tmp_path) -> None:

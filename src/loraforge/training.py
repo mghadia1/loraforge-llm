@@ -257,6 +257,23 @@ def check_baseline_agreement(
 COSMETIC_ARGUMENTS = frozenset({"logging_steps", "report_to", "save_strategy", "remove_unused_columns"})
 
 
+def optimizer_step_count(config: ExperimentConfig, train_rows: int) -> int:
+    """Optimizer steps over the frozen epochs; a final partial batch still steps."""
+    effective_batch = (
+        config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
+    )
+    return math.ceil(train_rows / effective_batch) * config.training.epochs
+
+
+def resolved_warmup_steps(config: ExperimentConfig, total_optimizer_steps: int) -> int:
+    """The integer warmup that matches ``warmup_ratio``, rounded up as Transformers does.
+
+    Training writes this value when TrainingArguments has no ``warmup_ratio``, and
+    verification recomputes it here, so the two can never disagree.
+    """
+    return math.ceil(config.training.warmup_ratio * total_optimizer_steps)
+
+
 def training_argument_kwargs(
     config: ExperimentConfig,
     supported: set[str],
@@ -285,9 +302,7 @@ def training_argument_kwargs(
     if "warmup_ratio" in supported:
         requested["warmup_ratio"] = config.training.warmup_ratio
     elif "warmup_steps" in supported:
-        requested["warmup_steps"] = math.ceil(
-            config.training.warmup_ratio * total_optimizer_steps
-        )
+        requested["warmup_steps"] = resolved_warmup_steps(config, total_optimizer_steps)
     else:
         raise EvidenceError(
             "TrainingArguments accepts neither warmup_ratio nor warmup_steps; the frozen "
@@ -337,10 +352,7 @@ def train_qlora(
     recorder = _EpochRecorder(model, tokenizer, bundle, config, root)
     import inspect
 
-    effective_batch = (
-        config.training.per_device_train_batch_size * config.training.gradient_accumulation_steps
-    )
-    total_optimizer_steps = math.ceil(len(features) / effective_batch) * config.training.epochs
+    total_optimizer_steps = optimizer_step_count(config, len(features))
     argument_kwargs = training_argument_kwargs(
         config,
         set(inspect.signature(TrainingArguments.__init__).parameters),
