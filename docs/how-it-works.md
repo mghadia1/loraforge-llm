@@ -224,10 +224,13 @@ reconstructs both validation selections from the pinned publisher-train split
 and requires their ordered row-ID digests to match; equal label sequences alone
 cannot make different validation articles look equivalent. When both reports
 use schema v2, strict comparison verifies both hash-bound pre-training manifests
-before marking their matching config, GPU, and package controls as independently
-verified. A mixed or historical schema-v1 pair remains explicitly sourced to
-self-reported training reports; merely declaring schema v2 without strict
-evidence verification cannot upgrade that classification. The command still
+before marking their matching config, GPU, and package controls `manifest_bound`:
+each run's controls match a hash-bound manifest that run wrote before optimizer
+training. Both files come from the same run, so this binds the controls in time
+but is not an independent second source. A mixed or historical schema-v1 pair
+remains explicitly sourced to self-reported training reports; merely declaring
+schema v2 without strict evidence verification cannot upgrade that
+classification. The command still
 calls the comparison result `recorded_controls_match` and does not emit a
 `controlled` claim, because the manifests bind the recorded controls rather than
 proving every unobserved causal condition. The historical rank-16/rank-4 pair is
