@@ -46,18 +46,30 @@ FROZEN_SELECTION_FIELDS = frozenset(
 )
 
 
-def _frozen_timestamp(name: str, value: Any) -> datetime:
+def _utc_timestamp(owner: str, name: str, value: Any) -> datetime:
+    """Parse an evidence timestamp, requiring a real UTC time written with Z."""
     if type(value) is not str or not value.endswith("Z"):
-        raise EvidenceError(f"frozen selection {name} must be a UTC timestamp ending in Z")
+        raise EvidenceError(f"{owner} {name} must be a UTC timestamp ending in Z")
     try:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as error:
-        raise EvidenceError(
-            f"frozen selection {name} must be a valid UTC timestamp"
-        ) from error
+        raise EvidenceError(f"{owner} {name} must be a valid UTC timestamp") from error
     if parsed.tzinfo != UTC:
-        raise EvidenceError(f"frozen selection {name} must be in UTC")
+        raise EvidenceError(f"{owner} {name} must be in UTC")
     return parsed
+
+
+def _frozen_timestamp(name: str, value: Any) -> datetime:
+    return _utc_timestamp("frozen selection", name, value)
+
+
+def _require_adapter_directory(adapter_dir: Path, label: str) -> None:
+    """Report a missing adapter directory as missing, not as changed evidence."""
+    if not adapter_dir.is_dir():
+        raise EvidenceError(
+            f"{label} adapter directory {adapter_dir} is missing; strict verification "
+            "needs these files (use --reports-only to verify reports and logits without them)"
+        )
 
 
 def _verify_frozen_envelope(frozen: Any) -> None:
@@ -295,13 +307,14 @@ def _verify_manifest_training_arguments(manifest: dict[str, Any], config) -> Non
                 "pre-training manifest training_arguments.warmup_ratio does not match config"
             )
     else:
-        effective_batch = (
-            config.training.per_device_train_batch_size
-            * config.training.gradient_accumulation_steps
-        )
+        # Use training's own functions: a second copy of this arithmetic once
+        # drifted (max(1, round(...)) here vs ceil there) and refused valid runs.
+        from .training import optimizer_step_count, resolved_warmup_steps
+
         train_rows = len(CLASS_NAMES) * config.data.train_per_class
-        optimizer_steps = math.ceil(train_rows / effective_batch) * config.training.epochs
-        expected_steps = max(1, round(config.training.warmup_ratio * optimizer_steps))
+        expected_steps = resolved_warmup_steps(
+            config, optimizer_step_count(config, train_rows)
+        )
         if type(recorded["warmup_steps"]) is not int or recorded["warmup_steps"] != expected_steps:
             raise EvidenceError(
                 "pre-training manifest training_arguments.warmup_steps does not match config"
@@ -406,11 +419,7 @@ def _verify_pretraining_manifest(report: dict[str, Any], root: Path, config) -> 
         raise EvidenceError("pre-training manifest fields do not match schema version 1")
     if type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1:
         raise EvidenceError("pre-training manifest schema_version must be integer 1")
-    if (
-        not isinstance(manifest.get("created_at_utc"), str)
-        or not manifest["created_at_utc"].endswith("Z")
-    ):
-        raise EvidenceError("pre-training manifest created_at_utc must be a UTC timestamp")
+    _utc_timestamp("pre-training manifest", "created_at_utc", manifest.get("created_at_utc"))
     if manifest.get("stage") != "before_optimizer_training":
         raise EvidenceError("pre-training manifest stage is not before optimizer training")
     if manifest.get("test_loaded") is not False:
@@ -525,6 +534,7 @@ def verify_training_report(
                 f"epoch-{entry['epoch']} adapter files changed since training: {error}"
             ) from error
         if verify_adapters:
+            _require_adapter_directory(adapter_dir, f"epoch-{entry['epoch']}")
             try:
                 verify_directory_snapshot(adapter_dir, entry["adapter_hashes"])
                 verify_saved_adapter_config(adapter_dir, config)
@@ -552,6 +562,7 @@ def verify_training_report(
             f"adapters/selected does not match the selected epoch checkpoint: {error}"
         ) from error
     if verify_adapters:
+        _require_adapter_directory(selected_dir, "selected")
         try:
             verify_directory_snapshot(
                 selected_dir,
