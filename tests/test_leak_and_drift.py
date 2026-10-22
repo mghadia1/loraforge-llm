@@ -179,6 +179,10 @@ def test_self_reported_controls_are_not_marked_independently_verified() -> None:
     assert comparison["control_evidence"] == {
         "source": "self_reported_training_reports",
         "independently_verified": False,
+        "pretraining_manifests_verified": {
+            "baseline": False,
+            "variant": False,
+        },
         "fields": ["config", "gpu", "packages"],
     }
     assert "controlled" not in comparison
@@ -341,11 +345,119 @@ def test_strict_file_comparison_verifies_both_reports_and_row_ids(
     assert comparison["recorded_controls_match"] is True
     assert comparison["evidence_verified"] is True
     assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
+        "baseline": False,
+        "variant": False,
+    }
     assert comparison["validation_rows_match"] is True
     assert verified == [
         (roots[0], bundles[16].validation.labels, False),
         (roots[1], bundles[4].validation.labels, False),
     ]
+
+
+def test_strict_file_comparison_recognizes_two_verified_schema_v2_manifests(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+    from dataclasses import replace
+
+    from loraforge.config import default_config
+
+    roots = [tmp_path / "baseline", tmp_path / "variant"]
+    reports = [report(STACK, 16, 0.9310), report(STACK, 4, 0.9295)]
+    configs = [
+        default_config(),
+        replace(
+            default_config(),
+            lora=replace(default_config().lora, rank=4, alpha=8),
+            test_evaluations_allowed=0,
+        ),
+    ]
+    paths = []
+    for root, stored, config in zip(roots, reports, configs):
+        stored["schema_version"] = 2
+        stored["config"] = config.to_dict()
+        path = root / "outputs" / "training-report.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(stored), encoding="utf-8")
+        paths.append(path)
+
+    bundles = [
+        DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+        DatasetBundle(
+            train=split("train", range(0, 4)),
+            validation=split("validation", range(10, 14)),
+        ),
+    ]
+    loaded = iter(bundles)
+    verified = []
+    monkeypatch.setattr(
+        "loraforge.data.load_dataset",
+        lambda *, allow_test, config: next(loaded),
+    )
+    monkeypatch.setattr(
+        "loraforge.selection.verify_training_report",
+        lambda stored, *, root, labels, verify_adapters: verified.append(root),
+    )
+
+    comparison = compare_report_files(
+        paths[0],
+        paths[1],
+        expected_config_changes={"lora.rank", "lora.alpha", "test_evaluations_allowed"},
+        verify_evidence=True,
+    )
+
+    assert comparison["control_evidence"] == {
+        "source": "hash_bound_pretraining_manifests",
+        "independently_verified": True,
+        "pretraining_manifests_verified": {
+            "baseline": True,
+            "variant": True,
+        },
+        "fields": ["config", "gpu", "packages"],
+    }
+    assert verified == roots
+
+
+def test_unverified_schema_v2_reports_do_not_claim_manifest_bound_controls() -> None:
+    baseline = report(STACK, 16, 0.9310)
+    variant = report(STACK, 4, 0.9295)
+    baseline["schema_version"] = 2
+    variant["schema_version"] = 2
+
+    comparison = compare_runs(
+        baseline,
+        variant,
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        pretraining_manifests_verified=(True, True),
+    )
+
+    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
+        "baseline": False,
+        "variant": False,
+    }
+
+
+def test_schema_v1_reports_cannot_be_upgraded_by_manifest_status_flags() -> None:
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        report(STACK, 4, 0.9295),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        validation_row_ids_sha256=("same-rows", "same-rows"),
+        evidence_verified=True,
+        pretraining_manifests_verified=(True, True),
+    )
+
+    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
+        "baseline": False,
+        "variant": False,
+    }
 
 
 def test_strict_file_comparison_stops_on_unverified_metrics(tmp_path, monkeypatch) -> None:

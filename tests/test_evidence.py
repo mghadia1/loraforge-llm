@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from loraforge.config import DataConfig, default_config
-from loraforge.data import Example, Split
+from loraforge.data import DatasetBundle, Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
     DELTA_NOTE,
@@ -64,10 +64,12 @@ def logits_for(labels, margin: float, seed: int) -> np.ndarray:
     return values.astype(np.float32)
 
 
-def write_adapter(root: Path, relative: str, payload: str) -> str:
+def write_adapter(
+    root: Path, relative: str, payload: str, *, config=None
+) -> str:
     directory = root / relative
     directory.mkdir(parents=True, exist_ok=True)
-    config = synthetic_config()
+    config = config or synthetic_config()
     write_json(
         {
             "base_model_name_or_path": config.model_name,
@@ -89,14 +91,25 @@ def write_adapter(root: Path, relative: str, payload: str) -> str:
 
 
 def make_training_run(
-    root: Path, *, epoch_margins=(1.5, 2.5), epoch_seeds=(11, 12), base_margin: float = 0.4
+    root: Path,
+    *,
+    config=None,
+    epoch_margins=(1.5, 2.5),
+    epoch_seeds=(11, 12),
+    base_margin: float = 0.4,
 ) -> dict:
     """Write a complete synthetic training run whose numbers match its own logits."""
+    config = config or synthetic_config()
     base_logits = logits_for(LABELS, base_margin, seed=1)
     epochs = []
     for index, (margin, seed) in enumerate(zip(epoch_margins, epoch_seeds), start=1):
         logits = logits_for(LABELS, margin, seed=seed)
-        relative = write_adapter(root, f"adapters/epoch-{index}", f"weights-{index}")
+        relative = write_adapter(
+            root,
+            f"adapters/epoch-{index}",
+            f"weights-{index}",
+            config=config,
+        )
         epochs.append(
             {
                 "epoch": index,
@@ -110,9 +123,11 @@ def make_training_run(
         )
     best = max(epochs, key=lambda entry: entry["validation"]["macro_f1"])
     selected = write_adapter(
-        root, "adapters/selected", f"weights-{best['epoch']}"
+        root,
+        "adapters/selected",
+        f"weights-{best['epoch']}",
+        config=config,
     )
-    config = synthetic_config()
     base_metrics = evaluation_block(base_logits, LABELS)
     write_json(
         {
@@ -131,7 +146,7 @@ def make_training_run(
         "model_revision": config.model_revision,
         "config": json.loads(json.dumps(config.to_dict())),
         "test_evaluated": False,
-        "train_rows": 40,
+        "train_rows": 4 * config.data.train_per_class,
         "validation_rows": len(LABELS),
         "validation_label_sha256": sha256_labels(LABELS),
         "baseline_agreement": {
@@ -157,10 +172,12 @@ def make_training_run(
     return report
 
 
-def upgrade_to_manifest_bound_report(root: Path, report: dict) -> dict:
-    config = synthetic_config()
+def upgrade_to_manifest_bound_report(
+    root: Path, report: dict, *, config=None
+) -> dict:
+    config = config or synthetic_config()
     total_parameters = 7_250_000_000
-    trainable_parameters = 41_943_040
+    trainable_parameters = config.lora.rank * 2_621_440
     report["schema_version"] = 2
     report["environment"] = {
         "python": "3.12.0",
@@ -415,6 +432,85 @@ def test_manifest_bound_training_report_verifies(tmp_path) -> None:
     report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
 
     assert verify_training_report(report, root=tmp_path, labels=LABELS)["epoch"] == 2
+
+
+def test_strict_comparison_verifies_two_real_pretraining_manifests(
+    tmp_path, monkeypatch
+) -> None:
+    from loraforge.compare import compare_report_files
+
+    baseline_config = synthetic_config()
+    variant_config = replace(
+        baseline_config,
+        lora=replace(baseline_config.lora, rank=4, alpha=8),
+    )
+    report_paths = []
+    for name, config in (
+        ("baseline", baseline_config),
+        ("variant", variant_config),
+    ):
+        root = tmp_path / name
+        report = make_training_run(root, config=config)
+        upgrade_to_manifest_bound_report(root, report, config=config)
+        report_path = root / "outputs" / "training-report.json"
+        write_json(report, report_path)
+        report_paths.append(report_path)
+
+    bundle = DatasetBundle(
+        train=Split(
+            "train",
+            tuple(
+                Example(
+                    row_id=f"train-{index}",
+                    text=f"training article {index}",
+                    label=index % 4,
+                    source_index=index,
+                )
+                for index in range(40)
+            ),
+        ),
+        validation=Split(
+            "validation",
+            tuple(
+                Example(
+                    row_id=f"validation-{index}",
+                    text=f"validation article {index}",
+                    label=label,
+                    source_index=40 + index,
+                )
+                for index, label in enumerate(LABELS)
+            ),
+        ),
+    )
+    load_calls = []
+
+    def load_training_data(*, allow_test, config):
+        load_calls.append((allow_test, config))
+        assert allow_test is False
+        return bundle
+
+    monkeypatch.setattr("loraforge.data.load_dataset", load_training_data)
+
+    comparison = compare_report_files(
+        report_paths[0],
+        report_paths[1],
+        expected_config_changes={"lora.rank", "lora.alpha"},
+        verify_evidence=True,
+    )
+
+    assert comparison["recorded_controls_match"] is True
+    assert comparison["evidence_verified"] is True
+    assert comparison["validation_rows_match"] is True
+    assert comparison["control_evidence"] == {
+        "source": "hash_bound_pretraining_manifests",
+        "independently_verified": True,
+        "pretraining_manifests_verified": {
+            "baseline": True,
+            "variant": True,
+        },
+        "fields": ["config", "gpu", "packages"],
+    }
+    assert len(load_calls) == 2
 
 
 def rewrite_manifest_warmup(
