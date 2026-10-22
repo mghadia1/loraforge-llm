@@ -503,7 +503,7 @@ def test_strict_comparison_verifies_two_real_pretraining_manifests(
     assert comparison["validation_rows_match"] is True
     assert comparison["control_evidence"] == {
         "source": "hash_bound_pretraining_manifests",
-        "independently_verified": True,
+        "manifest_bound": True,
         "pretraining_manifests_verified": {
             "baseline": True,
             "variant": True,

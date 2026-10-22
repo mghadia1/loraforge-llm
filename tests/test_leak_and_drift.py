@@ -165,7 +165,7 @@ def test_matching_recorded_controls_allow_comparison() -> None:
     require_strict_comparison(comparison)
 
 
-def test_self_reported_controls_are_not_marked_independently_verified() -> None:
+def test_self_reported_controls_are_not_marked_manifest_bound() -> None:
     fabricated = {name: "0.0-fabricated" for name in STACK}
     comparison = compare_runs(
         report(fabricated, 16, 0.9310, gpu="Imaginary H100"),
@@ -178,7 +178,7 @@ def test_self_reported_controls_are_not_marked_independently_verified() -> None:
     assert comparison["recorded_controls_match"] is True
     assert comparison["control_evidence"] == {
         "source": "self_reported_training_reports",
-        "independently_verified": False,
+        "manifest_bound": False,
         "pretraining_manifests_verified": {
             "baseline": False,
             "variant": False,
@@ -344,7 +344,7 @@ def test_strict_file_comparison_verifies_both_reports_and_row_ids(
 
     assert comparison["recorded_controls_match"] is True
     assert comparison["evidence_verified"] is True
-    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["manifest_bound"] is False
     assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
         "baseline": False,
         "variant": False,
@@ -413,7 +413,7 @@ def test_strict_file_comparison_recognizes_two_verified_schema_v2_manifests(
 
     assert comparison["control_evidence"] == {
         "source": "hash_bound_pretraining_manifests",
-        "independently_verified": True,
+        "manifest_bound": True,
         "pretraining_manifests_verified": {
             "baseline": True,
             "variant": True,
@@ -436,7 +436,7 @@ def test_unverified_schema_v2_reports_do_not_claim_manifest_bound_controls() -> 
         pretraining_manifests_verified=(True, True),
     )
 
-    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["manifest_bound"] is False
     assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
         "baseline": False,
         "variant": False,
@@ -453,7 +453,7 @@ def test_schema_v1_reports_cannot_be_upgraded_by_manifest_status_flags() -> None
         pretraining_manifests_verified=(True, True),
     )
 
-    assert comparison["control_evidence"]["independently_verified"] is False
+    assert comparison["control_evidence"]["manifest_bound"] is False
     assert comparison["control_evidence"]["pretraining_manifests_verified"] == {
         "baseline": False,
         "variant": False,

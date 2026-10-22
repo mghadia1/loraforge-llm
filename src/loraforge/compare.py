@@ -98,7 +98,7 @@ def compare_runs(
         and report["schema_version"] == 2
         for verified, report in zip(manifest_status, reports)
     )
-    controls_independently_verified = all(manifest_status)
+    controls_manifest_bound = all(manifest_status)
 
     package_drift = differences(
         baseline["environment"]["packages"], variant["environment"]["packages"]
@@ -150,10 +150,13 @@ def compare_runs(
         "control_evidence": {
             "source": (
                 "hash_bound_pretraining_manifests"
-                if controls_independently_verified
+                if controls_manifest_bound
                 else "self_reported_training_reports"
             ),
-            "independently_verified": controls_independently_verified,
+            # Each run's controls match a hash-bound manifest that the same run
+            # wrote before optimizer training. That binds them in time; it is
+            # not a second, independent source, hence not "independently verified".
+            "manifest_bound": controls_manifest_bound,
             "pretraining_manifests_verified": {
                 "baseline": manifest_status[0],
                 "variant": manifest_status[1],
