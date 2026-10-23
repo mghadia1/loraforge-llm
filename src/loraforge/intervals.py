@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from numbers import Real
 from pathlib import Path
 from typing import Any
 
@@ -94,10 +95,18 @@ def bootstrap_delta(
     Paired resampling matters: the two systems are scored on the same articles,
     so sampling them independently would overstate the uncertainty of the gap.
     """
-    if not 0 < alpha < 1:
+    if (
+        isinstance(alpha, bool)
+        or not isinstance(alpha, Real)
+        or not math.isfinite(float(alpha))
+        or not 0 < float(alpha) < 1
+    ):
         raise ValueError("alpha must be in (0, 1)")
-    if resamples < 1:
-        raise ValueError("resamples must be positive")
+    if type(resamples) is not int or resamples < 1:
+        raise ValueError("resamples must be a positive integer")
+    if type(seed) is not int or seed < 0:
+        raise ValueError("seed must be a nonnegative integer")
+    alpha = float(alpha)
     labels, base_predictions, tuned_predictions = _validate_class_vectors(
         labels, base_predictions, tuned_predictions
     )
