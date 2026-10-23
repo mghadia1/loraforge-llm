@@ -85,6 +85,26 @@ def test_bootstrap_rejects_bad_settings() -> None:
         bootstrap_delta(LABELS, same, np.full_like(LABELS, 4), resamples=10)
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"resamples": True}, "resamples must be a positive integer"),
+        ({"resamples": 1.5}, "resamples must be a positive integer"),
+        ({"seed": True}, "seed must be a nonnegative integer"),
+        ({"seed": 1.5}, "seed must be a nonnegative integer"),
+        ({"seed": -1}, "seed must be a nonnegative integer"),
+        ({"alpha": True}, "alpha must be in"),
+        ({"alpha": "0.05"}, "alpha must be in"),
+    ],
+)
+def test_bootstrap_settings_reject_coercible_protocol_aliases(
+    kwargs, message
+) -> None:
+    same = predictions_with_accuracy(LABELS, 300, seed=6)
+    with pytest.raises(ValueError, match=message):
+        bootstrap_delta(LABELS, same, same, **kwargs)
+
+
 def test_paired_counts_are_exact() -> None:
     labels = np.array([0, 1, 2, 3, 0, 1])
     base = np.array([0, 1, 0, 0, 1, 1])  # correct on rows 0, 1, 5
