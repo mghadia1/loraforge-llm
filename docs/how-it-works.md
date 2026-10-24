@@ -230,7 +230,9 @@ training. Both files come from the same run, so this binds the controls in time
 but is not an independent second source. A mixed or historical schema-v1 pair
 remains explicitly sourced to self-reported training reports; merely declaring
 schema v2 without strict evidence verification cannot upgrade that
-classification. The command still
+classification. All comparison verification and enforcement flags must be exact
+booleans, so integer or string aliases cannot label unverified evidence as
+verified. The command still
 calls the comparison result `recorded_controls_match` and does not emit a
 `controlled` claim, because the manifests bind the recorded controls rather than
 proving every unobserved causal condition. The historical rank-16/rank-4 pair is
