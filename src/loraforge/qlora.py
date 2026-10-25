@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
 from .config import ExperimentConfig
-from .provenance import EvidenceError
+from .provenance import EvidenceError, unique_json_loads
 
 
 def verify_saved_adapter_config(
@@ -23,8 +22,8 @@ def verify_saved_adapter_config(
     """
     path = Path(adapter_dir) / "adapter_config.json"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        payload = unique_json_loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
         raise EvidenceError(f"cannot read saved adapter config {path}: {error}") from error
     if type(payload) is not dict:
         raise EvidenceError("saved adapter config must be a JSON object")
