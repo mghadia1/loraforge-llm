@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from .config import ExperimentConfig
 from .data import Split
 from .metrics import evaluation_block, softmax
 from .provenance import (
+    AUDITED_PACKAGES,
     EvidenceError,
     environment,
     load_logits,
@@ -37,6 +39,102 @@ FINAL_REPORT = Path("outputs/final-test-report.json")
 FINAL_ATTEMPT = Path("outputs/final-test-attempt.json")
 CONFIRMATION = "i-am-running-the-single-final-test"
 DELTA_NOTE = "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is"
+DECODING_NOTE = (
+    "constrained: argmax over the four class-code token logits, so an unparseable "
+    "free-text answer is impossible by construction and invalid_prediction_rate is 0"
+)
+FINAL_REPORT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "test_evaluated",
+        "test_evaluations_run",
+        "split",
+        "rows",
+        "test_label_sha256",
+        "test_row_ids_sha256",
+        "model",
+        "model_revision",
+        "selected_epoch",
+        "selected_adapter_hashes",
+        "config",
+        "environment",
+        "decoding",
+        "systems",
+        "delta",
+    }
+)
+FINAL_SYSTEM_FIELDS = frozenset(
+    {
+        "metrics_before_temperature",
+        "validation_fitted_temperature",
+        "metrics_after_temperature",
+        "prediction_sha256",
+        "scoring_seconds",
+        "seconds_per_row",
+        "logits",
+    }
+)
+FINAL_ENVIRONMENT_FIELDS = frozenset(
+    {"python", "platform", "packages", "gpu_name", "cuda_available", "cuda_version"}
+)
+
+
+def _require_exact_fields(owner: str, value: Any, expected: frozenset[str]) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise EvidenceError(f"{owner} must be a JSON object")
+    actual = set(value)
+    if actual != expected:
+        raise EvidenceError(
+            f"{owner} fields differ from schema: "
+            f"missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
+        )
+    return value
+
+
+def _verify_final_report_envelope(report: Any) -> None:
+    """Reject fields that the final-test protocol does not produce or verify."""
+    report = _require_exact_fields("final report", report, FINAL_REPORT_FIELDS)
+    if report["decoding"] != DECODING_NOTE:
+        raise EvidenceError("final report decoding does not match the frozen protocol")
+
+    recorded_environment = _require_exact_fields(
+        "final report environment", report["environment"], FINAL_ENVIRONMENT_FIELDS
+    )
+    for field in ("python", "platform", "gpu_name", "cuda_version"):
+        if type(recorded_environment[field]) is not str or not recorded_environment[field]:
+            raise EvidenceError(f"final report environment.{field} must be a nonempty string")
+    if recorded_environment["cuda_available"] is not True:
+        raise EvidenceError("final report environment.cuda_available must be true")
+    packages = recorded_environment["packages"]
+    if type(packages) is not dict or set(packages) != set(AUDITED_PACKAGES):
+        raise EvidenceError(
+            "final report environment.packages must contain exactly the audited packages"
+        )
+    if any(type(version) is not str or not version for version in packages.values()):
+        raise EvidenceError(
+            "final report environment package versions must be nonempty strings"
+        )
+
+    systems = _require_exact_fields(
+        "final report systems", report["systems"], frozenset({"base", "tuned"})
+    )
+    for name, system in systems.items():
+        _require_exact_fields(
+            f"final report systems.{name}", system, FINAL_SYSTEM_FIELDS
+        )
+
+
+def _positive_finite_number(owner: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise EvidenceError(f"{owner} must be a positive finite number")
+    try:
+        valid = math.isfinite(value) and value > 0
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise EvidenceError(f"{owner} must be a positive finite number")
+    return float(value)
 
 
 def _system_block(
@@ -190,10 +288,7 @@ def run_final_test(
             "selected_adapter_hashes": frozen["selected_adapter_hashes"],
             "config": config.to_dict(),
             "environment": environment(),
-            "decoding": (
-                "constrained: argmax over the four class-code token logits, so an unparseable "
-                "free-text answer is impossible by construction and invalid_prediction_rate is 0"
-            ),
+            "decoding": DECODING_NOTE,
             "systems": {
                 "base": {**base, "logits": base_reference},
                 "tuned": {**tuned, "logits": tuned_reference},
@@ -252,6 +347,7 @@ def verify_final_report(
     if labels is not None and test_split is not None:
         raise ValueError("provide either labels or test_split, not both")
     report = read_json(root / FINAL_REPORT)
+    _verify_final_report_envelope(report)
     if (
         type(report.get("test_evaluations_run")) is not int
         or report["test_evaluations_run"] != 1
@@ -286,9 +382,7 @@ def verify_final_report(
             raise EvidenceError(
                 f"final report {field} does not match the validated training and frozen evidence"
             )
-    systems = report.get("systems")
-    if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
-        raise EvidenceError("final report must contain exactly the base and tuned systems")
+    systems = report["systems"]
 
     if test_split is not None:
         labels = test_split.labels
@@ -313,6 +407,21 @@ def verify_final_report(
 
     checked = {}
     for name, system in systems.items():
+        scoring_seconds = _positive_finite_number(
+            f"{name}.scoring_seconds", system["scoring_seconds"]
+        )
+        seconds_per_row = _positive_finite_number(
+            f"{name}.seconds_per_row", system["seconds_per_row"]
+        )
+        if not math.isclose(
+            seconds_per_row,
+            scoring_seconds / len(labels),
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            raise EvidenceError(
+                f"{name}.seconds_per_row does not match scoring_seconds / rows"
+            )
         for field, recorded_temperature in (
             ("validation_fitted_temperature", system["validation_fitted_temperature"]),
             (
