@@ -13,6 +13,7 @@ from loraforge.config import DataConfig, default_config
 from loraforge.data import DatasetBundle, Example, Split
 from loraforge.final_test import (
     CONFIRMATION,
+    DECODING_NOTE,
     DELTA_NOTE,
     FINAL_ATTEMPT,
     _system_block,
@@ -243,11 +244,21 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
         "split": "publisher test",
         "rows": len(LABELS),
         "test_label_sha256": sha256_labels(LABELS),
+        "test_row_ids_sha256": "synthetic-test-row-ids",
         "model": frozen["model"],
         "model_revision": frozen["model_revision"],
         "selected_epoch": frozen["selected_epoch"],
         "config": training["config"],
         "selected_adapter_hashes": frozen["selected_adapter_hashes"],
+        "environment": {
+            "python": "3.12.0",
+            "platform": "test-host",
+            "packages": {name: "test-version" for name in AUDITED_PACKAGES},
+            "gpu_name": "Tesla T4",
+            "cuda_available": True,
+            "cuda_version": "12.8",
+        },
+        "decoding": DECODING_NOTE,
         "systems": {
             "base": {**base, "logits": save_logits(base_logits, root, "outputs/logits/base-test.npy")},
             "tuned": {
@@ -1256,6 +1267,54 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
     )
     assert verified["verified"] is True
     assert verified["macro_f1_delta"] > 0
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ((), "final report fields differ"),
+        (("environment",), "final report environment fields differ"),
+        (("systems", "tuned"), "final report systems.tuned fields differ"),
+        (("systems", "tuned", "logits"), "logits reference fields differ"),
+    ],
+)
+def test_final_report_rejects_unsupported_claim_fields(tmp_path, path, message) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    report_path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(report_path)
+    target = report
+    for key in path:
+        target = target[key]
+    target["unsupported_claim"] = 999
+    write_json(report, report_path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("scoring_seconds", True, "positive finite number"),
+        ("scoring_seconds", -1.0, "positive finite number"),
+        ("seconds_per_row", 999.0, "does not match scoring_seconds / rows"),
+    ],
+)
+def test_final_report_scoring_times_must_be_typed_and_consistent(
+    tmp_path, field, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    report_path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(report_path)
+    report["systems"]["tuned"][field] = replacement
+    write_json(report, report_path)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
 @pytest.mark.parametrize("replacement", [True, 1.0])
