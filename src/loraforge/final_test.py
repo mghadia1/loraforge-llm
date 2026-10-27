@@ -20,6 +20,7 @@ from .provenance import (
     resolve_adapter_directory,
     save_logits,
     sha256_array,
+    sha256_file,
     sha256_labels,
     utc_now,
     write_json,
@@ -27,6 +28,7 @@ from .provenance import (
 from .selection import (
     METRIC_TOLERANCE,
     TRAINING_REPORT,
+    _utc_timestamp,
     recompute_block,
     require_frozen_selection,
     training_report_config,
@@ -35,8 +37,27 @@ from .selection import (
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
 FINAL_ATTEMPT = Path("outputs/final-test-attempt.json")
+FINAL_ATTEMPT_SCHEMA_VERSION = 2
 CONFIRMATION = "i-am-running-the-single-final-test"
 DELTA_NOTE = "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is"
+FINAL_ATTEMPT_STAGE = "publisher-test loading, scoring, metrics, and final report"
+FINAL_ATTEMPT_NOTE = (
+    "this durable claim prevents concurrent or automatic retries; preserve it "
+    "for protocol review even if the attempt fails"
+)
+COMPLETED_ATTEMPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "status",
+        "stage",
+        "selected_epoch",
+        "note",
+        "completed_at_utc",
+        "final_report",
+        "final_report_sha256",
+    }
+)
 
 
 def _system_block(
@@ -72,15 +93,12 @@ def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, di
     path = root / FINAL_ATTEMPT
     path.parent.mkdir(parents=True, exist_ok=True)
     attempt = {
-        "schema_version": 1,
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "status": "in_progress",
-        "stage": "publisher-test loading, scoring, metrics, and final report",
+        "stage": FINAL_ATTEMPT_STAGE,
         "selected_epoch": selected_epoch,
-        "note": (
-            "this durable claim prevents concurrent or automatic retries; preserve it "
-            "for protocol review even if the attempt fails"
-        ),
+        "note": FINAL_ATTEMPT_NOTE,
     }
     try:
         with path.open("x", encoding="utf-8") as handle:
@@ -234,10 +252,59 @@ def run_final_test(
             "status": "completed",
             "completed_at_utc": report["created_at_utc"],
             "final_report": str(FINAL_REPORT),
+            "final_report_sha256": sha256_file(root / FINAL_REPORT),
         },
         attempt_path,
     )
     return report
+
+
+def _verify_completed_final_attempt(root: Path, report: dict[str, Any]) -> bool:
+    """Bind a durable completed-attempt claim to its exact final report.
+
+    The completed historical experiment predates durable attempt claims, so a
+    missing claim remains an explicit unverified limitation. Once a claim
+    exists, however, it must be complete and hash-bind the report rather than
+    being silently ignored.
+    """
+    path = root / FINAL_ATTEMPT
+    if not path.exists():
+        return False
+    attempt = read_json(path)
+    if type(attempt) is not dict or set(attempt) != COMPLETED_ATTEMPT_FIELDS:
+        actual = set(attempt) if type(attempt) is dict else set()
+        raise EvidenceError(
+            "completed final-test attempt fields differ from schema: "
+            f"missing={sorted(COMPLETED_ATTEMPT_FIELDS - actual)}, "
+            f"unexpected={sorted(actual - COMPLETED_ATTEMPT_FIELDS)}"
+        )
+    expected = {
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
+        "status": "completed",
+        "stage": FINAL_ATTEMPT_STAGE,
+        "selected_epoch": report["selected_epoch"],
+        "note": FINAL_ATTEMPT_NOTE,
+        "completed_at_utc": report["created_at_utc"],
+        "final_report": str(FINAL_REPORT),
+        "final_report_sha256": sha256_file(root / FINAL_REPORT),
+    }
+    for field, expected_value in expected.items():
+        actual_value = attempt[field]
+        if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+            raise EvidenceError(
+                f"completed final-test attempt {field} does not match the final report"
+            )
+    claimed_at = _utc_timestamp(
+        "completed final-test attempt", "created_at_utc", attempt["created_at_utc"]
+    )
+    completed_at = _utc_timestamp(
+        "completed final-test attempt", "completed_at_utc", attempt["completed_at_utc"]
+    )
+    if completed_at < claimed_at:
+        raise EvidenceError(
+            "completed final-test attempt completed_at_utc predates created_at_utc"
+        )
+    return True
 
 
 def verify_final_report(
@@ -286,6 +353,7 @@ def verify_final_report(
             raise EvidenceError(
                 f"final report {field} does not match the validated training and frozen evidence"
             )
+    attempt_record_verified = _verify_completed_final_attempt(root, report)
     systems = report.get("systems")
     if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
         raise EvidenceError("final report must contain exactly the base and tuned systems")
@@ -377,6 +445,7 @@ def verify_final_report(
             )
     return {
         "verified": True,
+        "attempt_record_verified": attempt_record_verified,
         "systems": checked,
         "macro_f1_delta": expected_delta["macro_f1"],
     }
