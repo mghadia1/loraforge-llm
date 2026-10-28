@@ -175,6 +175,13 @@ training arguments, and parameter audit: package keys must be complete, CUDA
 fields must be internally consistent, protocol arguments must match the typed
 config, and parameter totals must reproduce the recorded percentage. Rehashing
 matching but malformed control blocks therefore cannot make them valid evidence.
+New evidence writers also require RFC 8259-compatible JSON: Python's non-standard
+`NaN` and infinity literals are refused. Trainer diagnostics that are genuinely
+unavailable are recorded as JSON `null`, and schema-v2 training verification
+rejects a non-finite number anywhere in the report even if a different writer
+created it. The immutable schema-v1 report remains readable with its historical
+`grad_norm: NaN` diagnostic; that compatibility does not permit new evidence to
+repeat the format.
 The completed historical schema-v1 report remains verifiable but is explicitly
 legacy evidence without this second-artifact binding.
 
