@@ -9,6 +9,7 @@ from loraforge.provenance import EvidenceError, read_json, sha256_file
 from loraforge.training import (
     capture_pretraining_manifest,
     refuse_existing_training_outputs,
+    standardize_trainer_log_history,
     training_argument_kwargs,
 )
 
@@ -120,6 +121,21 @@ def test_pretraining_manifest_is_written_once_and_hash_bound(
         capture_pretraining_manifest(
             default_config(), arguments, parameters, root=tmp_path
         )
+
+
+def test_trainer_diagnostics_use_json_null_for_non_finite_values() -> None:
+    standardized = standardize_trainer_log_history(
+        [
+            {"loss": 0.25, "grad_norm": float("nan"), "epoch": 1.0, "step": 10},
+            {"eval_loss": 0.2, "step": 10},
+            {"train_loss": 0.125, "train_runtime": float("inf"), "step": 20},
+        ]
+    )
+
+    assert standardized == [
+        {"loss": 0.25, "grad_norm": None, "epoch": 1.0, "step": 10},
+        {"train_loss": 0.125, "train_runtime": None, "step": 20},
+    ]
 
 
 def test_phase_one_inputs_are_allowed_in_a_fresh_training_root(tmp_path) -> None:

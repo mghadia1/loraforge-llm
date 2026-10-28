@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import platform
 from datetime import UTC, datetime
 from importlib import metadata
@@ -48,6 +49,24 @@ def unique_json_loads(text: str) -> Any:
         text,
         object_pairs_hook=_unique_json_object,
     )
+
+
+def require_standard_json_numbers(value: Any, *, label: str) -> None:
+    """Reject non-finite numbers that RFC 8259 JSON cannot represent.
+
+    Python's JSON parser accepts ``NaN`` and infinities as extensions. Historical
+    schema-v1 evidence contains one such Trainer diagnostic and must remain
+    readable, but new schema-v2 evidence is required to stay interoperable with
+    strict JSON readers.
+    """
+    if type(value) is float and not math.isfinite(value):
+        raise EvidenceError(f"{label} contains a non-finite JSON number")
+    if type(value) is dict:
+        for item in value.values():
+            require_standard_json_numbers(item, label=label)
+    elif type(value) is list:
+        for item in value:
+            require_standard_json_numbers(item, label=label)
 
 
 def utc_now() -> str:
@@ -329,8 +348,14 @@ def load_logits(reference: dict[str, Any], *, root: Path = Path(".")) -> np.ndar
 
 
 def write_json(payload: dict[str, Any], path: Path) -> None:
+    try:
+        serialized = json.dumps(payload, indent=2, allow_nan=False) + "\n"
+    except (TypeError, ValueError) as error:
+        raise EvidenceError(
+            f"refusing to write non-standard JSON evidence to {path}: {error}"
+        ) from error
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(serialized, encoding="utf-8")
 
 
 def read_json(path: Path) -> dict[str, Any]:

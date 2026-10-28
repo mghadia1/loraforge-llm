@@ -598,6 +598,14 @@ def test_schema_v2_training_report_requires_the_pretraining_manifest(tmp_path) -
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 
+def test_schema_v2_training_report_rejects_non_standard_json_numbers(tmp_path) -> None:
+    report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
+    report["loss_curve"] = [{"loss": 0.5, "grad_norm": float("nan")}]
+
+    with pytest.raises(EvidenceError, match="non-finite JSON number"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
 def test_edited_pretraining_manifest_is_rejected_by_its_retained_hash(tmp_path) -> None:
     report = upgrade_to_manifest_bound_report(tmp_path, make_training_run(tmp_path))
     path = tmp_path / "outputs" / "pretraining-manifest.json"
