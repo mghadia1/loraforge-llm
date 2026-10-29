@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -107,6 +109,32 @@ def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, di
     except FileExistsError as error:
         raise _previous_attempt_error(path) from error
     return path, attempt
+
+
+def _replace_final_test_attempt(path: Path, attempt: dict[str, Any]) -> None:
+    """Durably replace an attempt state without exposing a partial JSON file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(attempt, indent=2, allow_nan=False) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def run_final_test(
@@ -231,7 +259,8 @@ def run_final_test(
         frozen["test_evaluated_at_utc"] = report["created_at_utc"]
         write_json(frozen, root / "outputs" / "frozen-selection.json")
     except Exception as error:  # preserve and block retries after the claimed attempt
-        write_json(
+        _replace_final_test_attempt(
+            attempt_path,
             {
                 **attempt,
                 "status": "failed",
@@ -242,11 +271,11 @@ def run_final_test(
                     "already written under outputs/logits are from this attempt"
                 ),
             },
-            attempt_path,
         )
         raise
 
-    write_json(
+    _replace_final_test_attempt(
+        attempt_path,
         {
             **attempt,
             "status": "completed",
@@ -254,7 +283,6 @@ def run_final_test(
             "final_report": str(FINAL_REPORT),
             "final_report_sha256": sha256_file(root / FINAL_REPORT),
         },
-        attempt_path,
     )
     return report
 

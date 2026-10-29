@@ -19,6 +19,7 @@ from loraforge.final_test import (
     FINAL_ATTEMPT_NOTE,
     FINAL_ATTEMPT_SCHEMA_VERSION,
     FINAL_ATTEMPT_STAGE,
+    _replace_final_test_attempt,
     _system_block,
     run_final_test,
     verify_final_report,
@@ -1215,6 +1216,34 @@ def test_final_test_claims_attempt_before_loading_publisher_test(
     failed = read_json(tmp_path / FINAL_ATTEMPT)
     assert failed["status"] == "failed"
     assert failed["error"] == "RuntimeError: publisher-test request failed"
+
+
+def test_interrupted_attempt_transition_preserves_the_previous_claim(
+    tmp_path, monkeypatch
+) -> None:
+    attempt_path = tmp_path / FINAL_ATTEMPT
+    previous = {
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
+        "status": "in_progress",
+    }
+    write_json(previous, attempt_path)
+
+    def interrupt_replace(*args) -> None:
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(
+        "loraforge.final_test.os.replace",
+        interrupt_replace,
+    )
+
+    with pytest.raises(OSError, match="simulated interruption"):
+        _replace_final_test_attempt(
+            attempt_path,
+            {**previous, "status": "failed"},
+        )
+
+    assert read_json(attempt_path) == previous
+    assert list(attempt_path.parent.glob(f".{attempt_path.name}.*.tmp")) == []
 
 
 def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) -> None:

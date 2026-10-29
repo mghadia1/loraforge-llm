@@ -306,7 +306,10 @@ command atomically creates `outputs/final-test-attempt.json`. Concurrent runs
 and every later automatic retry are refused if that durable claim exists. The
 claim is retained with a completed or failed status, and a failed claim records
 the exception plus any logits that may belong to the attempt for manual
-protocol review. Schema-v2 completed claims include the exact final-report SHA-256;
+protocol review. Status transitions are written to a synced temporary file and
+atomically replace the prior claim, so an interruption cannot expose partial
+JSON or erase the readable `in_progress` state. Schema-v2 completed claims
+include the exact final-report SHA-256;
 verification requires their schema, selected epoch, lifecycle timestamps,
 report path, and hash to match the completed report. The tracked historical
 report predates durable attempt claims, so verification reports that limitation
