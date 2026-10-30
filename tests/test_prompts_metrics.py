@@ -192,6 +192,13 @@ def test_nll_does_not_cap_extreme_finite_logit_gaps() -> None:
     assert negative_log_likelihood(offset_logits, [0]) == pytest.approx(np.log(4.0))
 
 
+@pytest.mark.parametrize("metric", [negative_log_likelihood, evaluation_block])
+def test_temperature_scaling_refuses_float_overflow(metric) -> None:
+    logits = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    with pytest.raises(ValueError, match="temperature is too small"):
+        metric(logits, [0], temperature=1e-45)
+
+
 def test_ece_zero_when_confidence_matches_accuracy() -> None:
     probabilities = np.tile([0.7, 0.1, 0.1, 0.1], (100, 1))
     labels = [0] * 70 + [1] * 30

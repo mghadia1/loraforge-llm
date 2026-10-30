@@ -109,7 +109,9 @@ shaped logits, invalid labels/probabilities, non-positive calibration-bin counts
 and invalid temperature-search bounds instead of emitting plausible numbers.
 NLL uses max-shifted log-sum-exp arithmetic, so an extremely unlikely true
 class retains its full finite loss instead of being capped by a clipped,
-underflowed softmax probability.
+underflowed softmax probability. Temperature scaling also fails closed if a
+positive but unrepresentably small temperature would overflow the recorded
+logit dtype; it cannot emit a `NaN` calibration result from finite evidence.
 
 Before any evaluation split is loaded, model setup also requires the tokenizer
 vocabulary size, model config, input embeddings, and output head to agree, and
