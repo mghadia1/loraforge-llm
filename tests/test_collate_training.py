@@ -122,3 +122,17 @@ def test_selection_rejects_empty_and_duplicate_records() -> None:
                 {"epoch": 1, "validation": {"macro_f1": 0.6}},
             ]
         )
+
+
+@pytest.mark.parametrize("epoch", [True, 1.0, 0, "1"])
+def test_selection_requires_positive_integer_epochs(epoch) -> None:
+    with pytest.raises(ValueError, match="epoch must be a positive integer"):
+        select_checkpoint([{"epoch": epoch, "validation": {"macro_f1": 0.8}}])
+
+
+@pytest.mark.parametrize(
+    "macro_f1", [True, "0.8", float("nan"), float("inf"), -0.1, 1.1]
+)
+def test_selection_rejects_malformed_validation_scores(macro_f1) -> None:
+    with pytest.raises(ValueError, match="finite JSON number in \\[0, 1\\]"):
+        select_checkpoint([{"epoch": 1, "validation": {"macro_f1": macro_f1}}])
