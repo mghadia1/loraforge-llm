@@ -112,7 +112,32 @@ def select_checkpoint(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Highest validation macro-F1 wins; an exact tie goes to the earlier epoch."""
     if not records:
         raise ValueError("no checkpoint records to select from")
-    epochs = [record["epoch"] for record in records]
+    epochs = []
+    for index, record in enumerate(records):
+        if type(record) is not dict:
+            raise ValueError(f"checkpoint record {index} must be an object")
+        epoch = record.get("epoch")
+        if type(epoch) is not int or epoch < 1:
+            raise ValueError(
+                f"checkpoint record {index} epoch must be a positive integer"
+            )
+        validation = record.get("validation")
+        if type(validation) is not dict:
+            raise ValueError(
+                f"checkpoint record {index} validation must be an object"
+            )
+        macro_f1 = validation.get("macro_f1")
+        if (
+            isinstance(macro_f1, bool)
+            or type(macro_f1) not in (int, float)
+            or not math.isfinite(macro_f1)
+            or not 0.0 <= macro_f1 <= 1.0
+        ):
+            raise ValueError(
+                f"checkpoint record {index} validation macro-F1 must be a "
+                "finite JSON number in [0, 1]"
+            )
+        epochs.append(epoch)
     if len(set(epochs)) != len(epochs):
         raise ValueError(f"duplicate epoch numbers in checkpoint records: {epochs}")
     return min(records, key=lambda record: (-record["validation"]["macro_f1"], record["epoch"]))

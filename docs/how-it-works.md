@@ -159,9 +159,11 @@ partial evidence from an earlier attempt.
 
 After each epoch the adapter is saved, hashed, and scored on validation. The
 selection rule is one line: highest validation macro-F1, and an exact tie goes
-to the earlier epoch. Both checkpoints, their validation logits, the loss curve,
-wall time, peak CUDA memory, package versions, and adapter hashes land in
-`outputs/training-report.json`.
+to the earlier epoch. Selection first requires positive integer epoch IDs and
+finite numeric macro-F1 values in `[0, 1]`; JSON booleans and non-finite values
+cannot enter the ordering as numeric aliases. Both checkpoints, their validation
+logits, the loss curve, wall time, peak CUDA memory, package versions, and adapter
+hashes land in `outputs/training-report.json`.
 
 Future training reports use schema version 2. Immediately before optimizer
 training, the trainer writes `outputs/pretraining-manifest.json` with the typed
