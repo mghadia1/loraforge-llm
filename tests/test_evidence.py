@@ -39,6 +39,7 @@ from loraforge.provenance import (
     write_json,
 )
 from loraforge.selection import (
+    FROZEN_SELECTION,
     build_frozen_selection,
     require_frozen_selection,
     verify_frozen_selection,
@@ -288,6 +289,8 @@ def write_completed_final_attempt(root: Path, report: dict) -> dict:
         "completed_at_utc": report["created_at_utc"],
         "final_report": "outputs/final-test-report.json",
         "final_report_sha256": sha256_file(root / "outputs" / "final-test-report.json"),
+        "frozen_selection": str(FROZEN_SELECTION),
+        "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
     }
     assert set(attempt) == set(COMPLETED_ATTEMPT_FIELDS)
     write_json(attempt, root / FINAL_ATTEMPT)
@@ -1298,6 +1301,10 @@ def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) ->
     assert attempt["final_report_sha256"] == sha256_file(
         tmp_path / "outputs" / "final-test-report.json"
     )
+    assert attempt["frozen_selection"] == "outputs/frozen-selection.json"
+    assert attempt["frozen_selection_sha256"] == sha256_file(
+        tmp_path / "outputs" / "frozen-selection.json"
+    )
 
 
 def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
@@ -1334,6 +1341,8 @@ def test_completed_final_attempt_is_hash_bound_to_the_report(tmp_path) -> None:
         ("completed_at_utc", "2026-01-02T00:00:00Z", "completed_at_utc"),
         ("final_report", "outputs/other.json", "final_report"),
         ("final_report_sha256", "0" * 64, "final_report_sha256"),
+        ("frozen_selection", "outputs/other.json", "frozen_selection"),
+        ("frozen_selection_sha256", "0" * 64, "frozen_selection_sha256"),
         ("created_at_utc", "not-a-timestamp", "created_at_utc"),
         ("created_at_utc", "2099-01-01T00:00:00Z", "predates"),
     ],

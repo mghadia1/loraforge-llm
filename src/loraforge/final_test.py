@@ -25,9 +25,9 @@ from .provenance import (
     sha256_file,
     sha256_labels,
     utc_now,
-    write_json,
 )
 from .selection import (
+    FROZEN_SELECTION,
     METRIC_TOLERANCE,
     TRAINING_REPORT,
     _utc_timestamp,
@@ -58,6 +58,8 @@ COMPLETED_ATTEMPT_FIELDS = frozenset(
         "completed_at_utc",
         "final_report",
         "final_report_sha256",
+        "frozen_selection",
+        "frozen_selection_sha256",
     }
 )
 
@@ -111,11 +113,11 @@ def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, di
     return path, attempt
 
 
-def _replace_final_test_attempt(path: Path, attempt: dict[str, Any]) -> None:
-    """Durably replace an attempt state without exposing a partial JSON file."""
+def _durably_replace_json(path: Path, value: dict[str, Any]) -> None:
+    """Durably replace JSON without exposing a partial file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(attempt, indent=2, allow_nan=False) + "\n"
+    payload = json.dumps(value, indent=2, allow_nan=False) + "\n"
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
         prefix=f".{path.name}.",
@@ -135,6 +137,11 @@ def _replace_final_test_attempt(path: Path, attempt: dict[str, Any]) -> None:
             os.close(directory_descriptor)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _replace_final_test_attempt(path: Path, attempt: dict[str, Any]) -> None:
+    """Durably replace an attempt state without exposing a partial JSON file."""
+    _durably_replace_json(path, attempt)
 
 
 def run_final_test(
@@ -254,10 +261,10 @@ def run_final_test(
                 "note": DELTA_NOTE,
             },
         }
-        write_json(report, root / FINAL_REPORT)
+        _durably_replace_json(root / FINAL_REPORT, report)
         frozen["test_evaluated"] = True
         frozen["test_evaluated_at_utc"] = report["created_at_utc"]
-        write_json(frozen, root / "outputs" / "frozen-selection.json")
+        _durably_replace_json(root / FROZEN_SELECTION, frozen)
     except Exception as error:  # preserve and block retries after the claimed attempt
         _replace_final_test_attempt(
             attempt_path,
@@ -282,6 +289,8 @@ def run_final_test(
             "completed_at_utc": report["created_at_utc"],
             "final_report": str(FINAL_REPORT),
             "final_report_sha256": sha256_file(root / FINAL_REPORT),
+            "frozen_selection": str(FROZEN_SELECTION),
+            "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
         },
     )
     return report
@@ -315,6 +324,8 @@ def _verify_completed_final_attempt(root: Path, report: dict[str, Any]) -> bool:
         "completed_at_utc": report["created_at_utc"],
         "final_report": str(FINAL_REPORT),
         "final_report_sha256": sha256_file(root / FINAL_REPORT),
+        "frozen_selection": str(FROZEN_SELECTION),
+        "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
     }
     for field, expected_value in expected.items():
         actual_value = attempt[field]
@@ -353,7 +364,7 @@ def verify_final_report(
     ):
         raise EvidenceError("the final report must record exactly one test evaluation")
     training_report = read_json(root / TRAINING_REPORT)
-    frozen = read_json(root / "outputs" / "frozen-selection.json")
+    frozen = read_json(root / FROZEN_SELECTION)
     if frozen.get("test_evaluated") is not True:
         raise EvidenceError("frozen selection must record that the test budget was consumed")
     report_timestamp = report.get("created_at_utc")

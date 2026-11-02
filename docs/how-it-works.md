@@ -306,12 +306,14 @@ command atomically creates `outputs/final-test-attempt.json`. Concurrent runs
 and every later automatic retry are refused if that durable claim exists. The
 claim is retained with a completed or failed status, and a failed claim records
 the exception plus any logits that may belong to the attempt for manual
-protocol review. Status transitions are written to a synced temporary file and
-atomically replace the prior claim, so an interruption cannot expose partial
-JSON or erase the readable `in_progress` state. Schema-v2 completed claims
-include the exact final-report SHA-256;
-verification requires their schema, selected epoch, lifecycle timestamps,
-report path, and hash to match the completed report. The tracked historical
+protocol review. The final report, consumed frozen-selection gate, and status
+transitions are each written to a synced temporary file and atomically replace
+their prior file, so an interruption cannot expose partial JSON or erase the
+readable `in_progress` state. The completed status is the transaction commit
+marker: schema-v2 completed claims include the exact SHA-256 of both the final
+report and consumed frozen-selection gate. Verification requires their schema,
+selected epoch, lifecycle timestamps, paths, and hashes to match both completed
+artifacts. The tracked historical
 report predates durable attempt claims, so verification reports that limitation
 as `attempt_record_verified: false` rather than fabricating a claim after the
 fact. A negative delta is reported exactly like a positive one.
