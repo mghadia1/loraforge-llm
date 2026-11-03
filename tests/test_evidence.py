@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -19,6 +21,7 @@ from loraforge.final_test import (
     FINAL_ATTEMPT_NOTE,
     FINAL_ATTEMPT_SCHEMA_VERSION,
     FINAL_ATTEMPT_STAGE,
+    _claim_final_test_attempt,
     _replace_final_test_attempt,
     _system_block,
     run_final_test,
@@ -1219,6 +1222,23 @@ def test_final_test_claims_attempt_before_loading_publisher_test(
     failed = read_json(tmp_path / FINAL_ATTEMPT)
     assert failed["status"] == "failed"
     assert failed["error"] == "RuntimeError: publisher-test request failed"
+
+
+def test_initial_attempt_claim_is_durable_before_publisher_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    synced = []
+
+    def record_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        synced.append("directory" if stat.S_ISDIR(mode) else "file")
+
+    monkeypatch.setattr("loraforge.final_test.os.fsync", record_fsync)
+
+    path, attempt = _claim_final_test_attempt(tmp_path, selected_epoch=2)
+
+    assert read_json(path) == attempt
+    assert synced == ["file", "directory"]
 
 
 def test_interrupted_attempt_transition_preserves_the_previous_claim(

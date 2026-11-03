@@ -92,6 +92,15 @@ def _previous_attempt_error(path: Path) -> EvidenceError:
     )
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist a directory entry created or replaced by this process."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, dict[str, Any]]:
     """Atomically spend the automatic attempt before publisher-test access."""
     path = root / FINAL_ATTEMPT
@@ -108,8 +117,11 @@ def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, di
         with path.open("x", encoding="utf-8") as handle:
             json.dump(attempt, handle, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
     except FileExistsError as error:
         raise _previous_attempt_error(path) from error
+    _fsync_directory(path.parent)
     return path, attempt
 
 
@@ -130,11 +142,7 @@ def _durably_replace_json(path: Path, value: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+        _fsync_directory(path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
 

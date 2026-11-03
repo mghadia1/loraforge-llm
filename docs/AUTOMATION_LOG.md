@@ -66,3 +66,4 @@
 - 2026-10-27 09:00 MST — Bound future completed final-test attempt records to the exact final-report SHA-256, epoch, path, and lifecycle timestamps while preserving the historical report's explicit missing-attempt limitation; 413 tests and reports-only training verification passed without publisher-test access.
 - 2026-10-29 09:00 MST — Made completed/failed final-test attempt transitions use fsynced same-directory temporary files and atomic replacement, preserving the prior readable one-run claim if a transition is interrupted.
 - 2026-11-02 09:06 MST — Made the durable completed final-test attempt commit and hash-bind both the final report and consumed frozen-selection gate, so partial or mismatched publication cannot verify as complete.
+- 2026-11-03 09:07 MST — Synced the exclusive in-progress final-test claim and its directory before publisher-test loading, so a host crash cannot erase the sole durable one-run guard.
