@@ -254,6 +254,7 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
     publisher_train = hf_load_dataset(
         config.dataset_name,
         revision=config.dataset_revision,
+        data_files={"train": "data/train-*"},
         split="train",
     )
     if len(publisher_train) != 120_000:
@@ -267,6 +268,7 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
         publisher_test = hf_load_dataset(
             config.dataset_name,
             revision=config.dataset_revision,
+            data_files={"test": "data/test-*"},
             split="test",
         )
         if len(publisher_test) != config.publisher_test_rows:
