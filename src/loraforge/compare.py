@@ -17,6 +17,11 @@ from .provenance import EvidenceError, read_json
 MISSING = {"present": False}
 
 
+def _require_exact_bool(value: Any, name: str) -> None:
+    if type(value) is not bool:
+        raise ValueError(f"{name} must be a boolean")
+
+
 def flatten(payload: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     flat: dict[str, Any] = {}
     for key, value in payload.items():
@@ -75,6 +80,7 @@ def compare_runs(
     pretraining_manifests_verified: tuple[bool, bool] | None = None,
 ) -> dict[str, Any]:
     """Diff two reports without overstating self-reported controls as verified."""
+    _require_exact_bool(evidence_verified, "evidence_verified")
     expected = expected_config_changes or set()
 
     manifest_status = (
@@ -201,6 +207,7 @@ def require_strict_comparison(
     comparison: dict[str, Any], *, require_verified_evidence: bool = False
 ) -> None:
     """Raise on failed evidence verification or drift in the recorded controls."""
+    _require_exact_bool(require_verified_evidence, "require_verified_evidence")
     if comparison["recorded_controls_match"] and (
         comparison.get("evidence_verified") or not require_verified_evidence
     ):
@@ -237,6 +244,7 @@ def compare_report_files(
     expected_config_changes: set[str] | None = None,
     verify_evidence: bool = False,
 ) -> dict[str, Any]:
+    _require_exact_bool(verify_evidence, "verify_evidence")
     baseline_path = Path(baseline_path)
     variant_path = Path(variant_path)
     baseline = read_json(baseline_path)

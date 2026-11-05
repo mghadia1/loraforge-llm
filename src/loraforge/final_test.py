@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,7 @@ from .config import ExperimentConfig
 from .data import Split
 from .metrics import evaluation_block, softmax
 from .provenance import (
+    AUDITED_PACKAGES,
     EvidenceError,
     environment,
     load_logits,
@@ -20,13 +24,15 @@ from .provenance import (
     resolve_adapter_directory,
     save_logits,
     sha256_array,
+    sha256_file,
     sha256_labels,
     utc_now,
-    write_json,
 )
 from .selection import (
+    FROZEN_SELECTION,
     METRIC_TOLERANCE,
     TRAINING_REPORT,
+    _utc_timestamp,
     recompute_block,
     require_frozen_selection,
     training_report_config,
@@ -35,8 +41,127 @@ from .selection import (
 
 FINAL_REPORT = Path("outputs/final-test-report.json")
 FINAL_ATTEMPT = Path("outputs/final-test-attempt.json")
+FINAL_ATTEMPT_SCHEMA_VERSION = 2
 CONFIRMATION = "i-am-running-the-single-final-test"
 DELTA_NOTE = "positive macro-F1 delta means QLoRA helped; a negative delta is reported as-is"
+DECODING_NOTE = (
+    "constrained: argmax over the four class-code token logits, so an unparseable "
+    "free-text answer is impossible by construction and invalid_prediction_rate is 0"
+)
+FINAL_REPORT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "test_evaluated",
+        "test_evaluations_run",
+        "split",
+        "rows",
+        "test_label_sha256",
+        "test_row_ids_sha256",
+        "model",
+        "model_revision",
+        "selected_epoch",
+        "selected_adapter_hashes",
+        "config",
+        "environment",
+        "decoding",
+        "systems",
+        "delta",
+    }
+)
+FINAL_SYSTEM_FIELDS = frozenset(
+    {
+        "metrics_before_temperature",
+        "validation_fitted_temperature",
+        "metrics_after_temperature",
+        "prediction_sha256",
+        "scoring_seconds",
+        "seconds_per_row",
+        "logits",
+    }
+)
+FINAL_ENVIRONMENT_FIELDS = frozenset(
+    {"python", "platform", "packages", "gpu_name", "cuda_available", "cuda_version"}
+)
+
+
+def _require_exact_fields(owner: str, value: Any, expected: frozenset[str]) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise EvidenceError(f"{owner} must be a JSON object")
+    actual = set(value)
+    if actual != expected:
+        raise EvidenceError(
+            f"{owner} fields differ from schema: "
+            f"missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
+        )
+    return value
+
+
+def _verify_final_report_envelope(report: Any) -> None:
+    """Reject fields that the final-test protocol does not produce or verify."""
+    report = _require_exact_fields("final report", report, FINAL_REPORT_FIELDS)
+    if report["decoding"] != DECODING_NOTE:
+        raise EvidenceError("final report decoding does not match the frozen protocol")
+
+    recorded_environment = _require_exact_fields(
+        "final report environment", report["environment"], FINAL_ENVIRONMENT_FIELDS
+    )
+    for field in ("python", "platform", "gpu_name", "cuda_version"):
+        if type(recorded_environment[field]) is not str or not recorded_environment[field]:
+            raise EvidenceError(f"final report environment.{field} must be a nonempty string")
+    if recorded_environment["cuda_available"] is not True:
+        raise EvidenceError("final report environment.cuda_available must be true")
+    packages = recorded_environment["packages"]
+    if type(packages) is not dict or set(packages) != set(AUDITED_PACKAGES):
+        raise EvidenceError(
+            "final report environment.packages must contain exactly the audited packages"
+        )
+    if any(type(version) is not str or not version for version in packages.values()):
+        raise EvidenceError(
+            "final report environment package versions must be nonempty strings"
+        )
+
+    systems = _require_exact_fields(
+        "final report systems", report["systems"], frozenset({"base", "tuned"})
+    )
+    for name, system in systems.items():
+        _require_exact_fields(
+            f"final report systems.{name}", system, FINAL_SYSTEM_FIELDS
+        )
+
+
+def _positive_finite_number(owner: str, value: Any) -> float:
+    if type(value) not in (int, float):
+        raise EvidenceError(f"{owner} must be a positive finite number")
+    try:
+        valid = math.isfinite(value) and value > 0
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise EvidenceError(f"{owner} must be a positive finite number")
+    return float(value)
+
+
+FINAL_ATTEMPT_STAGE = "publisher-test loading, scoring, metrics, and final report"
+FINAL_ATTEMPT_NOTE = (
+    "this durable claim prevents concurrent or automatic retries; preserve it "
+    "for protocol review even if the attempt fails"
+)
+COMPLETED_ATTEMPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "created_at_utc",
+        "status",
+        "stage",
+        "selected_epoch",
+        "note",
+        "completed_at_utc",
+        "final_report",
+        "final_report_sha256",
+        "frozen_selection",
+        "frozen_selection_sha256",
+    }
+)
 
 
 def _system_block(
@@ -67,28 +192,64 @@ def _previous_attempt_error(path: Path) -> EvidenceError:
     )
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist a directory entry created or replaced by this process."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _claim_final_test_attempt(root: Path, selected_epoch: int) -> tuple[Path, dict[str, Any]]:
     """Atomically spend the automatic attempt before publisher-test access."""
     path = root / FINAL_ATTEMPT
     path.parent.mkdir(parents=True, exist_ok=True)
     attempt = {
-        "schema_version": 1,
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
         "created_at_utc": utc_now(),
         "status": "in_progress",
-        "stage": "publisher-test loading, scoring, metrics, and final report",
+        "stage": FINAL_ATTEMPT_STAGE,
         "selected_epoch": selected_epoch,
-        "note": (
-            "this durable claim prevents concurrent or automatic retries; preserve it "
-            "for protocol review even if the attempt fails"
-        ),
+        "note": FINAL_ATTEMPT_NOTE,
     }
     try:
         with path.open("x", encoding="utf-8") as handle:
             json.dump(attempt, handle, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
     except FileExistsError as error:
         raise _previous_attempt_error(path) from error
+    _fsync_directory(path.parent)
     return path, attempt
+
+
+def _durably_replace_json(path: Path, value: dict[str, Any]) -> None:
+    """Durably replace JSON without exposing a partial file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, indent=2, allow_nan=False) + "\n"
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _replace_final_test_attempt(path: Path, attempt: dict[str, Any]) -> None:
+    """Durably replace an attempt state without exposing a partial JSON file."""
+    _durably_replace_json(path, attempt)
 
 
 def run_final_test(
@@ -190,10 +351,7 @@ def run_final_test(
             "selected_adapter_hashes": frozen["selected_adapter_hashes"],
             "config": config.to_dict(),
             "environment": environment(),
-            "decoding": (
-                "constrained: argmax over the four class-code token logits, so an unparseable "
-                "free-text answer is impossible by construction and invalid_prediction_rate is 0"
-            ),
+            "decoding": DECODING_NOTE,
             "systems": {
                 "base": {**base, "logits": base_reference},
                 "tuned": {**tuned, "logits": tuned_reference},
@@ -208,12 +366,13 @@ def run_final_test(
                 "note": DELTA_NOTE,
             },
         }
-        write_json(report, root / FINAL_REPORT)
+        _durably_replace_json(root / FINAL_REPORT, report)
         frozen["test_evaluated"] = True
         frozen["test_evaluated_at_utc"] = report["created_at_utc"]
-        write_json(frozen, root / "outputs" / "frozen-selection.json")
+        _durably_replace_json(root / FROZEN_SELECTION, frozen)
     except Exception as error:  # preserve and block retries after the claimed attempt
-        write_json(
+        _replace_final_test_attempt(
+            attempt_path,
             {
                 **attempt,
                 "status": "failed",
@@ -224,20 +383,72 @@ def run_final_test(
                     "already written under outputs/logits are from this attempt"
                 ),
             },
-            attempt_path,
         )
         raise
 
-    write_json(
+    _replace_final_test_attempt(
+        attempt_path,
         {
             **attempt,
             "status": "completed",
             "completed_at_utc": report["created_at_utc"],
             "final_report": str(FINAL_REPORT),
+            "final_report_sha256": sha256_file(root / FINAL_REPORT),
+            "frozen_selection": str(FROZEN_SELECTION),
+            "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
         },
-        attempt_path,
     )
     return report
+
+
+def _verify_completed_final_attempt(root: Path, report: dict[str, Any]) -> bool:
+    """Bind a durable completed-attempt claim to its exact final report.
+
+    The completed historical experiment predates durable attempt claims, so a
+    missing claim remains an explicit unverified limitation. Once a claim
+    exists, however, it must be complete and hash-bind the report rather than
+    being silently ignored.
+    """
+    path = root / FINAL_ATTEMPT
+    if not path.exists():
+        return False
+    attempt = read_json(path)
+    if type(attempt) is not dict or set(attempt) != COMPLETED_ATTEMPT_FIELDS:
+        actual = set(attempt) if type(attempt) is dict else set()
+        raise EvidenceError(
+            "completed final-test attempt fields differ from schema: "
+            f"missing={sorted(COMPLETED_ATTEMPT_FIELDS - actual)}, "
+            f"unexpected={sorted(actual - COMPLETED_ATTEMPT_FIELDS)}"
+        )
+    expected = {
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
+        "status": "completed",
+        "stage": FINAL_ATTEMPT_STAGE,
+        "selected_epoch": report["selected_epoch"],
+        "note": FINAL_ATTEMPT_NOTE,
+        "completed_at_utc": report["created_at_utc"],
+        "final_report": str(FINAL_REPORT),
+        "final_report_sha256": sha256_file(root / FINAL_REPORT),
+        "frozen_selection": str(FROZEN_SELECTION),
+        "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
+    }
+    for field, expected_value in expected.items():
+        actual_value = attempt[field]
+        if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+            raise EvidenceError(
+                f"completed final-test attempt {field} does not match the final report"
+            )
+    claimed_at = _utc_timestamp(
+        "completed final-test attempt", "created_at_utc", attempt["created_at_utc"]
+    )
+    completed_at = _utc_timestamp(
+        "completed final-test attempt", "completed_at_utc", attempt["completed_at_utc"]
+    )
+    if completed_at < claimed_at:
+        raise EvidenceError(
+            "completed final-test attempt completed_at_utc predates created_at_utc"
+        )
+    return True
 
 
 def verify_final_report(
@@ -252,13 +463,14 @@ def verify_final_report(
     if labels is not None and test_split is not None:
         raise ValueError("provide either labels or test_split, not both")
     report = read_json(root / FINAL_REPORT)
+    _verify_final_report_envelope(report)
     if (
         type(report.get("test_evaluations_run")) is not int
         or report["test_evaluations_run"] != 1
     ):
         raise EvidenceError("the final report must record exactly one test evaluation")
     training_report = read_json(root / TRAINING_REPORT)
-    frozen = read_json(root / "outputs" / "frozen-selection.json")
+    frozen = read_json(root / FROZEN_SELECTION)
     if frozen.get("test_evaluated") is not True:
         raise EvidenceError("frozen selection must record that the test budget was consumed")
     report_timestamp = report.get("created_at_utc")
@@ -286,9 +498,8 @@ def verify_final_report(
             raise EvidenceError(
                 f"final report {field} does not match the validated training and frozen evidence"
             )
-    systems = report.get("systems")
-    if not isinstance(systems, dict) or set(systems) != {"base", "tuned"}:
-        raise EvidenceError("final report must contain exactly the base and tuned systems")
+    attempt_record_verified = _verify_completed_final_attempt(root, report)
+    systems = report["systems"]
 
     if test_split is not None:
         labels = test_split.labels
@@ -313,6 +524,21 @@ def verify_final_report(
 
     checked = {}
     for name, system in systems.items():
+        scoring_seconds = _positive_finite_number(
+            f"{name}.scoring_seconds", system["scoring_seconds"]
+        )
+        seconds_per_row = _positive_finite_number(
+            f"{name}.seconds_per_row", system["seconds_per_row"]
+        )
+        if not math.isclose(
+            seconds_per_row,
+            scoring_seconds / len(labels),
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            raise EvidenceError(
+                f"{name}.seconds_per_row does not match scoring_seconds / rows"
+            )
         for field, recorded_temperature in (
             ("validation_fitted_temperature", system["validation_fitted_temperature"]),
             (
@@ -377,6 +603,7 @@ def verify_final_report(
             )
     return {
         "verified": True,
+        "attempt_record_verified": attempt_record_verified,
         "systems": checked,
         "macro_f1_delta": expected_delta["macro_f1"],
     }

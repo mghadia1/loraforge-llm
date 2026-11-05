@@ -18,6 +18,7 @@ from .provenance import (
     read_json,
     resolve_adapter_directory,
     resolve_evidence_file,
+    require_standard_json_numbers,
     sha256_file,
     utc_now,
     verify_directory_snapshot,
@@ -443,6 +444,7 @@ def _verify_training_protocol(report: dict[str, Any], *, root: Path = Path("."))
     if type(schema_version) is not int or schema_version not in (1, 2):
         raise EvidenceError("training report schema_version must be integer 1 or 2")
     if schema_version == 2:
+        require_standard_json_numbers(report, label="schema-v2 training report")
         _verify_pretraining_manifest(report, root, config)
     elif "pretraining_manifest" in report:
         raise EvidenceError(

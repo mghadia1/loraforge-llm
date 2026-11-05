@@ -443,6 +443,47 @@ def test_unverified_schema_v2_reports_do_not_claim_manifest_bound_controls() -> 
     }
 
 
+@pytest.mark.parametrize("replacement", [1, 0, "true", object()])
+def test_comparison_rejects_non_boolean_evidence_verification_flags(
+    replacement,
+) -> None:
+    baseline = report(STACK, 16, 0.9310)
+    variant = report(STACK, 4, 0.9295)
+    baseline["schema_version"] = 2
+    variant["schema_version"] = 2
+
+    with pytest.raises(ValueError, match="evidence_verified must be a boolean"):
+        compare_runs(
+            baseline,
+            variant,
+            expected_config_changes={"lora.rank", "lora.alpha"},
+            validation_row_ids_sha256=("same-rows", "same-rows"),
+            evidence_verified=replacement,
+            pretraining_manifests_verified=(True, True),
+        )
+
+
+def test_strict_comparison_requires_an_exact_boolean_policy_flag() -> None:
+    comparison = compare_runs(
+        report(STACK, 16, 0.9310),
+        report(STACK, 4, 0.9295),
+        expected_config_changes={"lora.rank", "lora.alpha"},
+    )
+    with pytest.raises(ValueError, match="require_verified_evidence must be a boolean"):
+        require_strict_comparison(comparison, require_verified_evidence=1)
+
+
+def test_file_comparison_rejects_non_boolean_verification_before_file_access(
+    tmp_path,
+) -> None:
+    with pytest.raises(ValueError, match="verify_evidence must be a boolean"):
+        compare_report_files(
+            tmp_path / "missing-baseline.json",
+            tmp_path / "missing-variant.json",
+            verify_evidence=1,
+        )
+
+
 def test_schema_v1_reports_cannot_be_upgraded_by_manifest_status_flags() -> None:
     comparison = compare_runs(
         report(STACK, 16, 0.9310),

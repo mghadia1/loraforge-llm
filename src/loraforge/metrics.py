@@ -55,6 +55,18 @@ def _positive_finite(value: Any, name: str) -> float:
     return result
 
 
+def _temperature_scaled_logits(logits: np.ndarray, temperature: float) -> np.ndarray:
+    """Scale in the recorded dtype, but refuse arithmetic overflow."""
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        scaled = np.asarray(logits / temperature, dtype=float)
+    if not np.isfinite(scaled).all():
+        raise ValueError(
+            "temperature scaling must keep finite logits finite; "
+            "the temperature is too small for the recorded logit dtype"
+        )
+    return scaled
+
+
 def softmax(logits: np.ndarray) -> np.ndarray:
     values = np.asarray(logits, dtype=float)
     shifted = values - values.max(axis=-1, keepdims=True)
@@ -162,7 +174,7 @@ def negative_log_likelihood(
     # Scale before widening, matching the historical float32 evidence path.
     # Computing log-softmax directly avoids underflowing a very unlikely true
     # class to zero and then silently capping its loss at -log(1e-12).
-    scaled_logits = np.asarray(logits / fitted_temperature, dtype=float)
+    scaled_logits = _temperature_scaled_logits(logits, fitted_temperature)
     shifted_logits = scaled_logits - scaled_logits.max(axis=1, keepdims=True)
     shifted_log_partition = np.log(np.exp(shifted_logits).sum(axis=1))
     true_shifted_logits = shifted_logits[np.arange(len(label_array)), label_array]
@@ -224,7 +236,7 @@ def evaluation_block(
 ) -> dict[str, Any]:
     class_logits, label_array = _logits_and_labels(class_logits, labels)
     temperature = _positive_finite(temperature, "temperature")
-    probabilities = softmax(class_logits / temperature)
+    probabilities = softmax(_temperature_scaled_logits(class_logits, temperature))
     predictions = probabilities.argmax(axis=1).tolist()
     return {
         **evaluate_predictions(label_array.tolist(), predictions),

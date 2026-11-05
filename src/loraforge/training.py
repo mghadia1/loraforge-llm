@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import shutil
 import time
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -112,7 +113,32 @@ def select_checkpoint(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Highest validation macro-F1 wins; an exact tie goes to the earlier epoch."""
     if not records:
         raise ValueError("no checkpoint records to select from")
-    epochs = [record["epoch"] for record in records]
+    epochs = []
+    for index, record in enumerate(records):
+        if type(record) is not dict:
+            raise ValueError(f"checkpoint record {index} must be an object")
+        epoch = record.get("epoch")
+        if type(epoch) is not int or epoch < 1:
+            raise ValueError(
+                f"checkpoint record {index} epoch must be a positive integer"
+            )
+        validation = record.get("validation")
+        if type(validation) is not dict:
+            raise ValueError(
+                f"checkpoint record {index} validation must be an object"
+            )
+        macro_f1 = validation.get("macro_f1")
+        if (
+            isinstance(macro_f1, bool)
+            or type(macro_f1) not in (int, float)
+            or not math.isfinite(macro_f1)
+            or not 0.0 <= macro_f1 <= 1.0
+        ):
+            raise ValueError(
+                f"checkpoint record {index} validation macro-F1 must be a "
+                "finite JSON number in [0, 1]"
+            )
+        epochs.append(epoch)
     if len(set(epochs)) != len(epochs):
         raise ValueError(f"duplicate epoch numbers in checkpoint records: {epochs}")
     return min(records, key=lambda record: (-record["validation"]["macro_f1"], record["epoch"]))
@@ -274,6 +300,44 @@ def resolved_warmup_steps(config: ExperimentConfig, total_optimizer_steps: int) 
     return math.ceil(config.training.warmup_ratio * total_optimizer_steps)
 
 
+def standardize_trainer_log_history(
+    log_history: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep loss diagnostics while emitting only standard JSON scalar values.
+
+    Trainer may record an unavailable gradient norm as ``NaN``. Preserve that
+    fact explicitly as JSON ``null`` rather than writing Python's non-standard
+    ``NaN`` token into new evidence. Historical schema-v1 evidence remains
+    unchanged and readable.
+    """
+    if type(log_history) is not list:
+        raise EvidenceError("Trainer log history must be a list")
+    standardized = []
+    for entry in log_history:
+        if type(entry) is not dict:
+            raise EvidenceError("Trainer log history entries must be objects")
+        if "loss" not in entry and "train_loss" not in entry:
+            continue
+        clean: dict[str, Any] = {}
+        for name, value in entry.items():
+            if type(name) is not str:
+                raise EvidenceError("Trainer log history field names must be strings")
+            if value is None or type(value) in (str, bool):
+                clean[name] = value
+            elif isinstance(value, Integral):
+                clean[name] = int(value)
+            elif isinstance(value, Real):
+                number = float(value)
+                clean[name] = number if math.isfinite(number) else None
+            else:
+                raise EvidenceError(
+                    f"Trainer log history field {name!r} has unsupported value type "
+                    f"{type(value).__name__}"
+                )
+        standardized.append(clean)
+    return standardized
+
+
 def training_argument_kwargs(
     config: ExperimentConfig,
     supported: set[str],
@@ -423,9 +487,7 @@ def train_qlora(
             "selected_adapter_dir": selected_relative,
             "selected_adapter_hashes": sha256_directory(selected_dir),
         },
-        "loss_curve": [
-            entry for entry in trainer.state.log_history if "loss" in entry or "train_loss" in entry
-        ],
+        "loss_curve": standardize_trainer_log_history(trainer.state.log_history),
         "wall_time_seconds": wall_time,
         "peak_cuda_memory_gib": float(torch.cuda.max_memory_allocated() / 1024**3),
     }

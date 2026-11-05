@@ -106,6 +106,19 @@ def test_saved_adapter_config_matches_the_frozen_protocol(tmp_path) -> None:
     assert verified["r"] == 16
 
 
+def test_saved_adapter_config_rejects_duplicate_protocol_fields(tmp_path) -> None:
+    adapter = tmp_path / "adapter"
+    write_saved_config(adapter)
+    path = adapter / "adapter_config.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace('"r": 16', '"r": 4, "r": 16'),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvidenceError, match="duplicate JSON object key 'r'"):
+        verify_saved_adapter_config(adapter, default_config())
+
+
 @pytest.mark.parametrize(
     ("updates", "message"),
     [

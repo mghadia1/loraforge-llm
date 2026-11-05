@@ -88,8 +88,9 @@ Experiment JSON is parsed as an exact typed schema before any model or dataset
 work starts. Missing and unexpected fields are rejected instead of inheriting
 silent dataclass defaults, JSON booleans cannot stand in for integer counts,
 and every nested object and target-module array keeps its declared shape.
-Experiment configs and evidence artifacts reject duplicate object keys at every
-level rather than silently applying parser-specific last-value-wins semantics.
+Experiment configs, evidence artifacts, and saved PEFT adapter configs reject
+duplicate object keys at every level rather than silently applying
+parser-specific last-value-wins semantics.
 
 The completed run's Tesla T4 identity is cross-checked between setup and
 training evidence, and the selected adapter's 167,838,575-byte size is checked
@@ -109,7 +110,9 @@ shaped logits, invalid labels/probabilities, non-positive calibration-bin counts
 and invalid temperature-search bounds instead of emitting plausible numbers.
 NLL uses max-shifted log-sum-exp arithmetic, so an extremely unlikely true
 class retains its full finite loss instead of being capped by a clipped,
-underflowed softmax probability.
+underflowed softmax probability. Temperature scaling also fails closed if a
+positive but unrepresentably small temperature would overflow the recorded
+logit dtype; it cannot emit a `NaN` calibration result from finite evidence.
 
 Before any evaluation split is loaded, model setup also requires the tokenizer
 vocabulary size, model config, input embeddings, and output head to agree, and
@@ -159,9 +162,11 @@ partial evidence from an earlier attempt.
 
 After each epoch the adapter is saved, hashed, and scored on validation. The
 selection rule is one line: highest validation macro-F1, and an exact tie goes
-to the earlier epoch. Both checkpoints, their validation logits, the loss curve,
-wall time, peak CUDA memory, package versions, and adapter hashes land in
-`outputs/training-report.json`.
+to the earlier epoch. Selection first requires positive integer epoch IDs and
+finite numeric macro-F1 values in `[0, 1]`; JSON booleans and non-finite values
+cannot enter the ordering as numeric aliases. Both checkpoints, their validation
+logits, the loss curve, wall time, peak CUDA memory, package versions, and adapter
+hashes land in `outputs/training-report.json`.
 
 Future training reports use schema version 2. Immediately before optimizer
 training, the trainer writes `outputs/pretraining-manifest.json` with the typed
@@ -175,6 +180,13 @@ training arguments, and parameter audit: package keys must be complete, CUDA
 fields must be internally consistent, protocol arguments must match the typed
 config, and parameter totals must reproduce the recorded percentage. Rehashing
 matching but malformed control blocks therefore cannot make them valid evidence.
+New evidence writers also require RFC 8259-compatible JSON: Python's non-standard
+`NaN` and infinity literals are refused. Trainer diagnostics that are genuinely
+unavailable are recorded as JSON `null`, and schema-v2 training verification
+rejects a non-finite number anywhere in the report even if a different writer
+created it. The immutable schema-v1 report remains readable with its historical
+`grad_norm: NaN` diagnostic; that compatibility does not permit new evidence to
+repeat the format.
 The completed historical schema-v1 report remains verifiable but is explicitly
 legacy evidence without this second-artifact binding.
 
@@ -230,7 +242,9 @@ training. Both files come from the same run, so this binds the controls in time
 but is not an independent second source. A mixed or historical schema-v1 pair
 remains explicitly sourced to self-reported training reports; merely declaring
 schema v2 without strict evidence verification cannot upgrade that
-classification. The command still
+classification. All comparison verification and enforcement flags must be exact
+booleans, so integer or string aliases cannot label unverified evidence as
+verified. The command still
 calls the comparison result `recorded_controls_match` and does not emit a
 `controlled` claim, because the manifests bind the recorded controls rather than
 proving every unobserved causal condition. The historical rank-16/rank-4 pair is
@@ -249,7 +263,11 @@ integer, the frozen gate must record the same test-consumption timestamp as the
 final report, and every reported accuracy, macro-F1, and calibrated-ECE delta is
 re-derived from the two verified system blocks. Editing any stored metric,
 provenance field, delta, or calibration temperature by hand makes verification
-fail — which is the point. The GPU-free tests include exactly those tamper cases.
+fail — which is the point. The verifier also requires the exact final-report,
+environment, system, and logit-reference schemas, so an unsupported claim cannot
+hide in an ignored field. Recorded scoring durations must be positive finite
+numbers, and each per-row duration must equal its system duration divided by the
+verified row count. The GPU-free tests include exactly those tamper cases.
 
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the
@@ -275,9 +293,12 @@ Verification recomputes its entire deterministic tree, including the scope,
 zero-new-evaluations claim, bootstrap settings and no-improvement count, paired
 counts, and McNemar statistics. The continuity correction clamps equal fixed
 and broken counts to a zero chi-square rather than squaring a negative adjusted
-difference. Standalone interval commands also require an exact integer one-run
-count and a fully typed embedded config before any dataset load. Extremely small p-values carry a scientific
-string so float underflow can never turn them into a false zero.
+difference. Bootstrap resample counts and seeds must be exact integers rather
+than coercible boolean or floating-point aliases, and alpha must be a finite
+number strictly between zero and one. Standalone interval commands also require
+an exact integer one-run count and a fully typed embedded config before any
+dataset load. Extremely small p-values carry a scientific string so float
+underflow can never turn them into a false zero.
 
 ## The one test evaluation
 
@@ -302,11 +323,23 @@ base, enabled for the tuned — so the prompt, tokenizer, and quantization are
 identical by construction. Because decoding is constrained to the four class
 logits, the invalid-output rate is 0 by construction; that is a property of the
 scoring design, not a result. Immediately before publisher-test loading, the
-command atomically creates `outputs/final-test-attempt.json`. Concurrent runs
-and every later automatic retry are refused if that durable claim exists. The
-claim is retained with a completed or failed status, and a failed claim records
-the exception plus any logits that may belong to the attempt for manual
-protocol review. A negative delta is reported exactly like a positive one.
+command exclusively creates `outputs/final-test-attempt.json`, fsyncs its
+contents, and fsyncs the output directory. The one-run claim therefore reaches
+durable storage before held-out access begins. Concurrent runs and every later
+automatic retry are refused if that claim exists. The claim is retained with a
+completed or failed status, and a failed claim records the exception plus any
+logits that may belong to the attempt for manual protocol review. The final
+report, consumed frozen-selection gate, and status transitions are each
+written to a synced temporary file and atomically replace
+their prior file, so an interruption cannot expose partial JSON or erase the
+readable `in_progress` state. The completed status is the transaction commit
+marker: schema-v2 completed claims include the exact SHA-256 of both the final
+report and consumed frozen-selection gate. Verification requires their schema,
+selected epoch, lifecycle timestamps, paths, and hashes to match both completed
+artifacts. The tracked historical
+report predates durable attempt claims, so verification reports that limitation
+as `attempt_record_verified: false` rather than fabricating a claim after the
+fact. A negative delta is reported exactly like a positive one.
 
 ## Measured outcome
 
