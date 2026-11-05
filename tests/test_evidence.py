@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -12,10 +14,16 @@ import pytest
 from loraforge.config import DataConfig, default_config
 from loraforge.data import DatasetBundle, Example, Split
 from loraforge.final_test import (
+    COMPLETED_ATTEMPT_FIELDS,
     CONFIRMATION,
     DECODING_NOTE,
     DELTA_NOTE,
     FINAL_ATTEMPT,
+    FINAL_ATTEMPT_NOTE,
+    FINAL_ATTEMPT_SCHEMA_VERSION,
+    FINAL_ATTEMPT_STAGE,
+    _claim_final_test_attempt,
+    _replace_final_test_attempt,
     _system_block,
     run_final_test,
     verify_final_report,
@@ -35,6 +43,7 @@ from loraforge.provenance import (
     write_json,
 )
 from loraforge.selection import (
+    FROZEN_SELECTION,
     build_frozen_selection,
     require_frozen_selection,
     verify_frozen_selection,
@@ -281,6 +290,25 @@ def make_final_report(root: Path, *, tuned_margin: float = 2.5) -> dict:
     frozen["test_evaluated_at_utc"] = report["created_at_utc"]
     write_json(frozen, root / "outputs" / "frozen-selection.json")
     return report
+
+
+def write_completed_final_attempt(root: Path, report: dict) -> dict:
+    attempt = {
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
+        "created_at_utc": report["created_at_utc"],
+        "status": "completed",
+        "stage": FINAL_ATTEMPT_STAGE,
+        "selected_epoch": report["selected_epoch"],
+        "note": FINAL_ATTEMPT_NOTE,
+        "completed_at_utc": report["created_at_utc"],
+        "final_report": "outputs/final-test-report.json",
+        "final_report_sha256": sha256_file(root / "outputs" / "final-test-report.json"),
+        "frozen_selection": str(FROZEN_SELECTION),
+        "frozen_selection_sha256": sha256_file(root / FROZEN_SELECTION),
+    }
+    assert set(attempt) == set(COMPLETED_ATTEMPT_FIELDS)
+    write_json(attempt, root / FINAL_ATTEMPT)
+    return attempt
 
 
 def test_frozen_selection_records_two_separate_validation_temperatures(tmp_path) -> None:
@@ -1207,6 +1235,51 @@ def test_final_test_claims_attempt_before_loading_publisher_test(
     assert failed["error"] == "RuntimeError: publisher-test request failed"
 
 
+def test_initial_attempt_claim_is_durable_before_publisher_test_access(
+    tmp_path, monkeypatch
+) -> None:
+    synced = []
+
+    def record_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        synced.append("directory" if stat.S_ISDIR(mode) else "file")
+
+    monkeypatch.setattr("loraforge.final_test.os.fsync", record_fsync)
+
+    path, attempt = _claim_final_test_attempt(tmp_path, selected_epoch=2)
+
+    assert read_json(path) == attempt
+    assert synced == ["file", "directory"]
+
+
+def test_interrupted_attempt_transition_preserves_the_previous_claim(
+    tmp_path, monkeypatch
+) -> None:
+    attempt_path = tmp_path / FINAL_ATTEMPT
+    previous = {
+        "schema_version": FINAL_ATTEMPT_SCHEMA_VERSION,
+        "status": "in_progress",
+    }
+    write_json(previous, attempt_path)
+
+    def interrupt_replace(*args) -> None:
+        raise OSError("simulated interruption")
+
+    monkeypatch.setattr(
+        "loraforge.final_test.os.replace",
+        interrupt_replace,
+    )
+
+    with pytest.raises(OSError, match="simulated interruption"):
+        _replace_final_test_attempt(
+            attempt_path,
+            {**previous, "status": "failed"},
+        )
+
+    assert read_json(attempt_path) == previous
+    assert list(attempt_path.parent.glob(f".{attempt_path.name}.*.tmp")) == []
+
+
 def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) -> None:
     make_training_run(tmp_path)
     build_frozen_selection(root=tmp_path, labels=LABELS)
@@ -1256,6 +1329,13 @@ def test_successful_final_test_completes_attempt_claim(tmp_path, monkeypatch) ->
     assert attempt["status"] == "completed"
     assert attempt["completed_at_utc"] == report["created_at_utc"]
     assert attempt["final_report"] == "outputs/final-test-report.json"
+    assert attempt["final_report_sha256"] == sha256_file(
+        tmp_path / "outputs" / "final-test-report.json"
+    )
+    assert attempt["frozen_selection"] == "outputs/frozen-selection.json"
+    assert attempt["frozen_selection_sha256"] == sha256_file(
+        tmp_path / "outputs" / "frozen-selection.json"
+    )
 
 
 def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
@@ -1266,6 +1346,7 @@ def test_final_report_verifies_against_its_own_logits(tmp_path) -> None:
         root=tmp_path, labels=LABELS, validation_labels=LABELS
     )
     assert verified["verified"] is True
+    assert verified["attempt_record_verified"] is False
     assert verified["macro_f1_delta"] > 0
 
 
@@ -1294,6 +1375,19 @@ def test_final_report_rejects_unsupported_claim_fields(tmp_path, path, message) 
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 
+def test_completed_final_attempt_is_hash_bound_to_the_report(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    report = make_final_report(tmp_path)
+    write_completed_final_attempt(tmp_path, report)
+
+    verified = verify_final_report(
+        root=tmp_path, labels=LABELS, validation_labels=LABELS
+    )
+
+    assert verified["attempt_record_verified"] is True
+
+
 @pytest.mark.parametrize(
     ("field", "replacement", "message"),
     [
@@ -1314,6 +1408,47 @@ def test_final_report_scoring_times_must_be_typed_and_consistent(
     write_json(report, report_path)
 
     with pytest.raises(EvidenceError, match=message):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "message"),
+    [
+        ("status", "in_progress", "status"),
+        ("schema_version", 1, "schema_version"),
+        ("selected_epoch", 1, "selected_epoch"),
+        ("completed_at_utc", "2026-01-02T00:00:00Z", "completed_at_utc"),
+        ("final_report", "outputs/other.json", "final_report"),
+        ("final_report_sha256", "0" * 64, "final_report_sha256"),
+        ("frozen_selection", "outputs/other.json", "frozen_selection"),
+        ("frozen_selection_sha256", "0" * 64, "frozen_selection_sha256"),
+        ("created_at_utc", "not-a-timestamp", "created_at_utc"),
+        ("created_at_utc", "2099-01-01T00:00:00Z", "predates"),
+    ],
+)
+def test_completed_final_attempt_must_match_the_report(
+    tmp_path, field, replacement, message
+) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    report = make_final_report(tmp_path)
+    attempt = write_completed_final_attempt(tmp_path, report)
+    attempt[field] = replacement
+    write_json(attempt, tmp_path / FINAL_ATTEMPT)
+
+    with pytest.raises(EvidenceError, match=message):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_completed_final_attempt_rejects_unsupported_fields(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    report = make_final_report(tmp_path)
+    attempt = write_completed_final_attempt(tmp_path, report)
+    attempt["unsupported_claim"] = "unverified"
+    write_json(attempt, tmp_path / FINAL_ATTEMPT)
+
+    with pytest.raises(EvidenceError, match="unexpected=.*unsupported_claim"):
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 

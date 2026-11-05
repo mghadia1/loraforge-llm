@@ -312,11 +312,23 @@ base, enabled for the tuned — so the prompt, tokenizer, and quantization are
 identical by construction. Because decoding is constrained to the four class
 logits, the invalid-output rate is 0 by construction; that is a property of the
 scoring design, not a result. Immediately before publisher-test loading, the
-command atomically creates `outputs/final-test-attempt.json`. Concurrent runs
-and every later automatic retry are refused if that durable claim exists. The
-claim is retained with a completed or failed status, and a failed claim records
-the exception plus any logits that may belong to the attempt for manual
-protocol review. A negative delta is reported exactly like a positive one.
+command exclusively creates `outputs/final-test-attempt.json`, fsyncs its
+contents, and fsyncs the output directory. The one-run claim therefore reaches
+durable storage before held-out access begins. Concurrent runs and every later
+automatic retry are refused if that claim exists. The claim is retained with a
+completed or failed status, and a failed claim records the exception plus any
+logits that may belong to the attempt for manual protocol review. The final
+report, consumed frozen-selection gate, and status transitions are each
+written to a synced temporary file and atomically replace
+their prior file, so an interruption cannot expose partial JSON or erase the
+readable `in_progress` state. The completed status is the transaction commit
+marker: schema-v2 completed claims include the exact SHA-256 of both the final
+report and consumed frozen-selection gate. Verification requires their schema,
+selected epoch, lifecycle timestamps, paths, and hashes to match both completed
+artifacts. The tracked historical
+report predates durable attempt claims, so verification reports that limitation
+as `attempt_record_verified: false` rather than fabricating a claim after the
+fact. A negative delta is reported exactly like a positive one.
 
 ## Measured outcome
 
