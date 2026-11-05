@@ -297,8 +297,15 @@ def save_logits(array: np.ndarray, root: Path, relative_path: str) -> dict[str, 
 
 def load_logits(reference: dict[str, Any], *, root: Path = Path(".")) -> np.ndarray:
     """Load logits only when their path, shape, and hash match the report."""
-    if not isinstance(reference, dict):
+    if type(reference) is not dict:
         raise EvidenceError("logits reference must be an object")
+    expected_fields = {"path", "sha256", "shape"}
+    if set(reference) != expected_fields:
+        raise EvidenceError(
+            "logits reference fields differ from schema: "
+            f"missing={sorted(expected_fields - reference.keys())}, "
+            f"unexpected={sorted(reference.keys() - expected_fields)}"
+        )
     path = _resolve_logit_path(root, reference.get("path"))
     if not path.exists():
         raise EvidenceError(f"missing logits file {path}")
