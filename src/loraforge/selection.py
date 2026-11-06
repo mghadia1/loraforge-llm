@@ -121,7 +121,9 @@ def _verify_frozen_envelope(frozen: Any) -> None:
             )
 
 
-def _assert_close(name: str, recorded: float, recomputed: float) -> None:
+def _assert_close(name: str, recorded: Any, recomputed: Any) -> None:
+    if type(recorded) not in (int, float) or type(recomputed) not in (int, float):
+        raise EvidenceError(f"{name} must be a finite JSON number")
     recorded_value = float(recorded)
     recomputed_value = float(recomputed)
     if (

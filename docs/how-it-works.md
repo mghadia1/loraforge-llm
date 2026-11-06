@@ -261,13 +261,15 @@ row count is always checked; when the verifier loads the pinned dataset, it also
 checks the ordered row-ID digest. The one-run counter must be an exact JSON
 integer, the frozen gate must record the same test-consumption timestamp as the
 final report, and every reported accuracy, macro-F1, and calibrated-ECE delta is
-re-derived from the two verified system blocks. Editing any stored metric,
-provenance field, delta, or calibration temperature by hand makes verification
-fail — which is the point. The verifier also requires the exact final-report,
-environment, system, and logit-reference schemas, so an unsupported claim cannot
-hide in an ignored field. Recorded scoring durations must be positive finite
-numbers, and each per-row duration must equal its system duration divided by the
-verified row count. The GPU-free tests include exactly those tamper cases.
+re-derived from the two verified system blocks. Standalone temperatures and
+baseline-agreement scalars must remain finite JSON numbers; numeric strings or
+boolean aliases cannot pass through verifier-side coercion. Editing any stored
+metric, provenance field, delta, or calibration temperature by hand makes
+verification fail — which is the point. The verifier also requires the exact
+final-report, environment, system, and logit-reference schemas, so an unsupported
+claim cannot hide in an ignored field. Recorded scoring durations must be positive
+finite numbers, and each per-row duration must equal its system duration divided
+by the verified row count. The GPU-free tests include exactly those tamper cases.
 
 Generated model cards quote measured run values only from the run reports. If
 there is no artifact for a classical baseline or annotated error analysis, the
