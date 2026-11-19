@@ -43,11 +43,15 @@ contains only the pinned publisher-train parquet glob, then asks for
 `split="train"`. This matters on a cold cache: passing `split="train"` alone can
 still make the datasets library prepare every declared split, including test.
 Constraining the builder's file map prevents publisher-test content from being
-downloaded or materialized during training-only work. A caller must explicitly
-set the exact boolean `allow_test=True`; truthy integer, string, and object
-aliases fail before any dataset access. The authorized path makes a separate
-request whose file map contains only the publisher-test glob, after checkpoint
-and temperature selection are frozen.
+downloaded or materialized during training-only work. Because the pinned dataset
+metadata declares both publisher splits, the partial file map uses the datasets
+library's `no_checks` preparation mode to avoid a false "missing test split"
+error; LoRAForge independently validates the pinned revision, exact row count,
+class ontology, row schema, uniqueness, and cross-split leakage. A caller must
+explicitly set the exact boolean `allow_test=True`; truthy integer, string, and
+object aliases fail before any dataset access. The authorized path makes a
+separate request whose file map contains only the publisher-test glob, after
+checkpoint and temperature selection are frozen.
 
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
