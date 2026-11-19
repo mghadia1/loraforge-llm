@@ -206,8 +206,8 @@ class FakePublisherSplit:
 def test_default_loader_never_requests_the_publisher_test_split(monkeypatch) -> None:
     requested = []
 
-    def fake_load_dataset(name, *, revision, split):
-        requested.append((name, revision, split))
+    def fake_load_dataset(name, *, revision, data_files, split):
+        requested.append((name, revision, data_files, split))
         assert split == "train"
         return FakePublisherSplit(120_000)
 
@@ -222,7 +222,14 @@ def test_default_loader_never_requests_the_publisher_test_split(monkeypatch) -> 
     bundle = load_dataset(allow_test=False)
 
     assert bundle.test is None
-    assert [split for _, _, split in requested] == ["train"]
+    assert requested == [
+        (
+            data_module.DataConfig().dataset_name,
+            data_module.DataConfig().dataset_revision,
+            {"train": "data/train-*"},
+            "train",
+        )
+    ]
 
 
 @pytest.mark.parametrize("allow_test", [1, "true", object()])
@@ -246,8 +253,8 @@ def test_loader_rejects_truthy_non_boolean_test_permission(
 def test_authorized_loader_requests_test_only_after_train(monkeypatch) -> None:
     requested = []
 
-    def fake_load_dataset(name, *, revision, split):
-        requested.append(split)
+    def fake_load_dataset(name, *, revision, data_files, split):
+        requested.append((data_files, split))
         rows = 120_000 if split == "train" else 7_600
         return FakePublisherSplit(rows)
 
@@ -261,7 +268,10 @@ def test_authorized_loader_requests_test_only_after_train(monkeypatch) -> None:
 
     bundle = load_dataset(allow_test=True)
 
-    assert requested == ["train", "test"]
+    assert requested == [
+        ({"train": "data/train-*"}, "train"),
+        ({"test": "data/test-*"}, "test"),
+    ]
     assert bundle.require_test().name == "test"
     assert len(bundle.require_test()) == 7_600
 

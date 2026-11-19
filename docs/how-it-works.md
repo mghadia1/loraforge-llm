@@ -38,11 +38,16 @@ Each loaded split must also contain unique row identities and unique
 model-visible content, preventing repeated articles from silently receiving
 extra training weight or being counted more than once in evaluation.
 
-The default loader asks Hugging Face for `split="train"` only; it does not even
-request the publisher test split. A caller must explicitly set the exact boolean
-`allow_test=True`; truthy integer, string, and object aliases fail before any
-dataset access. The authorized path makes a separate `split="test"` request
-after checkpoint and temperature selection are frozen.
+The default loader gives Hugging Face a split-specific `data_files` map that
+contains only the pinned publisher-train parquet glob, then asks for
+`split="train"`. This matters on a cold cache: passing `split="train"` alone can
+still make the datasets library prepare every declared split, including test.
+Constraining the builder's file map prevents publisher-test content from being
+downloaded or materialized during training-only work. A caller must explicitly
+set the exact boolean `allow_test=True`; truthy integer, string, and object
+aliases fail before any dataset access. The authorized path makes a separate
+request whose file map contains only the publisher-test glob, after checkpoint
+and temperature selection are frozen.
 
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
@@ -107,7 +112,8 @@ run reports macro-F1, per-class metrics, NLL, ECE before/after temperature, and
 invalid-output rate. Temperature scaling cannot change argmax predictions, so
 it cannot improve macro-F1. Metric computation rejects non-finite or wrongly
 shaped logits, invalid labels/probabilities, non-positive calibration-bin counts,
-and invalid temperature-search bounds instead of emitting plausible numbers.
+invalid temperature-search bounds, and tolerances below floating-point resolution
+instead of emitting plausible numbers or allowing a stalled search to loop.
 NLL uses max-shifted log-sum-exp arithmetic, so an extremely unlikely true
 class retains its full finite loss instead of being capped by a clipped,
 underflowed softmax probability. Temperature scaling also fails closed if a
