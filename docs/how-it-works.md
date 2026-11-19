@@ -38,11 +38,16 @@ Each loaded split must also contain unique row identities and unique
 model-visible content, preventing repeated articles from silently receiving
 extra training weight or being counted more than once in evaluation.
 
-The default loader asks Hugging Face for `split="train"` only; it does not even
-request the publisher test split. A caller must explicitly set the exact boolean
-`allow_test=True`; truthy integer, string, and object aliases fail before any
-dataset access. The authorized path makes a separate `split="test"` request
-after checkpoint and temperature selection are frozen.
+The default loader gives Hugging Face a split-specific `data_files` map that
+contains only the pinned publisher-train parquet glob, then asks for
+`split="train"`. This matters on a cold cache: passing `split="train"` alone can
+still make the datasets library prepare every declared split, including test.
+Constraining the builder's file map prevents publisher-test content from being
+downloaded or materialized during training-only work. A caller must explicitly
+set the exact boolean `allow_test=True`; truthy integer, string, and object
+aliases fail before any dataset access. The authorized path makes a separate
+request whose file map contains only the publisher-test glob, after checkpoint
+and temperature selection are frozen.
 
 The validation window can also be pinned independently of the training count.
 The validation-only expanded-data preset keeps the original 500 rows per class
