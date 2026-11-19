@@ -256,6 +256,7 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
         revision=config.dataset_revision,
         data_files={"train": "data/train-*"},
         split="train",
+        verification_mode="no_checks",
     )
     if len(publisher_train) != 120_000:
         raise ValueError("upstream AG News train split size changed")
@@ -270,6 +271,7 @@ def load_dataset(*, allow_test: bool = False, config: DataConfig | None = None) 
             revision=config.dataset_revision,
             data_files={"test": "data/test-*"},
             split="test",
+            verification_mode="no_checks",
         )
         if len(publisher_test) != config.publisher_test_rows:
             raise ValueError("upstream AG News test split size changed")
