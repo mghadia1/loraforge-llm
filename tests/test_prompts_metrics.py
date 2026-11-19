@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -253,6 +255,18 @@ def test_temperature_search_rejects_invalid_bounds(kwargs) -> None:
     logits = np.eye(4, dtype=float)
     with pytest.raises(ValueError, match="temperature search"):
         fit_temperature(logits, [0, 1, 2, 3], **kwargs)
+
+
+def test_temperature_search_rejects_unrepresentable_tolerance() -> None:
+    logits = np.eye(4, dtype=float)
+    with pytest.raises(ValueError, match="floating-point resolution"):
+        fit_temperature(
+            logits,
+            [0, 1, 2, 3],
+            low=1.0,
+            high=10.0,
+            tolerance=math.ulp(10.0) / 2.0,
+        )
 
 
 def test_temperature_scaling_does_not_change_argmax() -> None:

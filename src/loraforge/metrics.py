@@ -204,18 +204,31 @@ def fit_temperature(
         raise ValueError("temperature search lower bound must be below its upper bound")
     if tolerance >= high - low:
         raise ValueError("temperature search tolerance must be smaller than its range")
+    if tolerance < max(math.ulp(low), math.ulp(high)):
+        raise ValueError(
+            "temperature search tolerance must not be below floating-point "
+            "resolution for its bounds"
+        )
     class_logits, labels = _logits_and_labels(class_logits, labels)
     search_low, search_high = low, high
     inverse_phi = (np.sqrt(5.0) - 1.0) / 2.0
     c = high - inverse_phi * (high - low)
     d = low + inverse_phi * (high - low)
-    while high - low > tolerance:
+    previous_width = high - low
+    while previous_width > tolerance:
         if negative_log_likelihood(class_logits, labels, c) < negative_log_likelihood(
             class_logits, labels, d
         ):
             high = d
         else:
             low = c
+        current_width = high - low
+        if current_width >= previous_width:
+            raise ValueError(
+                "temperature search stopped making floating-point progress; "
+                "increase its tolerance"
+            )
+        previous_width = current_width
         c = high - inverse_phi * (high - low)
         d = low + inverse_phi * (high - low)
     fitted = float((low + high) / 2.0)
