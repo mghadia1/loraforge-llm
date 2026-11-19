@@ -363,6 +363,20 @@ def test_frozen_selection_rejects_unsupported_top_level_claims(tmp_path) -> None
         verify_frozen_selection(root=tmp_path, labels=LABELS)
 
 
+def test_frozen_temperature_must_be_a_json_number(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    path = tmp_path / "outputs" / "frozen-selection.json"
+    frozen = read_json(path)
+    frozen["validation"]["base"]["temperature"] = str(
+        frozen["validation"]["base"]["temperature"]
+    )
+    write_json(frozen, path)
+
+    with pytest.raises(EvidenceError, match="finite JSON number"):
+        verify_frozen_selection(root=tmp_path, labels=LABELS)
+
+
 def test_selection_tie_break_is_honoured_end_to_end(tmp_path) -> None:
     make_training_run(tmp_path, epoch_margins=(2.5, 2.5), epoch_seeds=(12, 12))
     report = read_json(tmp_path / "outputs" / "training-report.json")
@@ -420,6 +434,16 @@ def test_boolean_metric_scalars_cannot_alias_numeric_evidence(
     target[path[-1]] = replacement
 
     with pytest.raises(EvidenceError, match="base_validation"):
+        verify_training_report(report, root=tmp_path, labels=LABELS)
+
+
+def test_baseline_agreement_scalars_must_be_json_numbers(tmp_path) -> None:
+    report = make_training_run(tmp_path)
+    report["baseline_agreement"]["tolerance"] = str(
+        report["baseline_agreement"]["tolerance"]
+    )
+
+    with pytest.raises(EvidenceError, match="finite JSON number"):
         verify_training_report(report, root=tmp_path, labels=LABELS)
 
 
@@ -1555,6 +1579,21 @@ def test_final_report_temperature_must_match_the_validation_gate(tmp_path) -> No
     write_json(report, path)
 
     with pytest.raises(EvidenceError, match="temperature fitted on validation"):
+        verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
+
+
+def test_final_report_temperature_must_be_a_json_number(tmp_path) -> None:
+    make_training_run(tmp_path)
+    build_frozen_selection(root=tmp_path, labels=LABELS)
+    make_final_report(tmp_path)
+    path = tmp_path / "outputs" / "final-test-report.json"
+    report = read_json(path)
+    report["systems"]["base"]["validation_fitted_temperature"] = str(
+        report["systems"]["base"]["validation_fitted_temperature"]
+    )
+    write_json(report, path)
+
+    with pytest.raises(EvidenceError, match="positive finite number"):
         verify_final_report(root=tmp_path, labels=LABELS, validation_labels=LABELS)
 
 

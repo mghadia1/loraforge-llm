@@ -546,16 +546,10 @@ def verify_final_report(
                 system["metrics_after_temperature"]["temperature"],
             ),
         ):
-            try:
-                difference = abs(
-                    float(recorded_temperature) - fitted_temperatures[name]
-                )
-            except (TypeError, ValueError) as error:
-                raise EvidenceError(f"{name}.{field} must be a finite number") from error
-            if (
-                not np.isfinite(float(recorded_temperature))
-                or difference > METRIC_TOLERANCE
-            ):
+            temperature = _positive_finite_number(
+                f"{name}.{field}", recorded_temperature
+            )
+            if abs(temperature - fitted_temperatures[name]) > METRIC_TOLERANCE:
                 raise EvidenceError(
                     f"{name}.{field} does not match the temperature fitted on validation"
                 )
